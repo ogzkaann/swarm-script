@@ -1,103 +1,106 @@
 # Swarm Script
 
-**Program a three-robot squad, then watch its rules survive a fast deterministic arena run.**
+**Program your squad. Watch the logic fight.**
 
-Swarm Script is a desktop-first automation roguelite vertical slice. Each robot runs a small, safe rule language; the same seed and scripts always produce the same outcome, while a dedicated worker keeps combat independent from rendering.
+Swarm Script is a desktop-first tactical automation game about programming three robots with a small, safe rule language, then watching those rules fight through a deterministic three-wave arena run.
 
-![Swarm Script v0.1 arena](docs/screenshots/swarm-script-v0.1.png)
+[Play the live game](https://swarm-script.vercel.app/) · [Technical architecture](https://swarm-script.vercel.app/architecture) · [Detailed architecture notes](docs/ARCHITECTURE.md)
 
-## Playable now
+![Swarm Script victory screen](docs/screenshots/swarm-script-victory.png)
 
-- Three distinct robots—Striker, Guardian, and Scout—with editable working scripts
-- A Monaco-powered language editor with highlighting, completion, and friendly diagnostics
-- Continuous top-down movement, projectiles, energy, health, waves, upgrades, victory, and defeat
-- Three deterministic waves with three seeded upgrade choices between waves
-- 1×, 2×, and 4× simulation speed, pause, reset, reduced motion, metrics, and event feed
-- Procedural tactical visuals, interpolated movement, trails, hit flashes, decision labels, and death bursts
-- Real run analysis with per-robot contribution, observations, and a deterministic checksum
+## Why this project matters
 
-## Local setup
+Swarm Script is a compact game that makes its engineering visible. The player-facing mechanic is the same system being demonstrated: source text becomes a validated AST, runs inside a budgeted interpreter, drives an authoritative fixed-step simulation in a Web Worker, and reaches a separate Phaser renderer through typed snapshots.
 
-Requirements: Node.js 24 LTS and pnpm 11.9+.
+The project is intentionally narrow—three robots, three waves, one complete run—so the language tooling, deterministic simulation, rendering boundary, responsive presentation, and automated browser flow can all be finished and verified rather than hidden behind a larger feature list.
 
-```bash
-pnpm install
-pnpm dev
-```
+## Gameplay
 
-Open the URL printed by Vite. No backend, account, or environment variables are required.
+1. Open [the live game](https://swarm-script.vercel.app/play) on a desktop viewport at least 1024 pixels wide.
+2. Edit the Striker, Guardian, and Scout behavior rules. The default scripts already compile and are ready to run.
+3. Select **Deploy Swarm** and watch each robot execute the first matching rule.
+4. Choose a squad protocol after waves one and two.
+5. Survive wave three to reach the run analysis and deterministic checksum.
 
-| Command             | Purpose                                                 |
-| ------------------- | ------------------------------------------------------- |
-| `pnpm dev`          | Start the web app                                       |
-| `pnpm build`        | Build every workspace package and the production client |
-| `pnpm test`         | Run scripting, simulation, and worker tests             |
-| `pnpm test:e2e`     | Run the browser smoke test                              |
-| `pnpm lint`         | Run ESLint                                              |
-| `pnpm typecheck`    | Check strict TypeScript across packages                 |
-| `pnpm format:check` | Check Prettier formatting                               |
-| `pnpm verify`       | Run the complete local verification sequence            |
+The run controls also provide pause, reset, 1×/2×/4× speed, a numeric seed, reduced motion, squad telemetry, and an event stream.
+
+![Swarm Script gameplay](docs/screenshots/swarm-script-gameplay.png)
+
+## Technical highlights
+
+- Hand-built tokenizer, recursive-descent parser, typed AST, static validation, diagnostics, and budgeted interpreter—no `eval`, generated JavaScript, or host-object access.
+- Deterministic 30 Hz simulation with stable entity order, seeded xorshift32 randomness, ordered upgrades, and an FNV-1a final checksum.
+- Typed Web Worker protocol keeps combat independent from React, Monaco, Phaser, and browser rendering cadence.
+- Phaser renders immutable snapshots while React receives separately throttled HUD state.
+- Strict TypeScript monorepo boundaries across shared contracts, scripting, simulation, and the web client.
+- Vitest coverage for the language, simulation, and worker host, plus Playwright coverage of the real three-wave browser flow.
+- Phaser and Monaco ship as lazy runtime chunks with visible loading and failure states.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  UI["React UI / Monaco"] -->|"typed commands"| W["Simulation Web Worker"]
+  UI["React UI + Monaco"] -->|"typed scripts and controls"| W["Simulation Web Worker"]
   W --> DSL["Tokenizer → Parser → AST → Interpreter"]
   W --> SIM["Fixed-step deterministic simulation"]
-  SIM -->|"15 Hz world snapshots"| B["Game bridge"]
-  B --> P["Phaser 4 presentation"]
-  W -->|"5 Hz derived HUD state"| UI
-  SH["shared contracts"] --- UI
+  SIM -->|"15 Hz immutable snapshots"| B["Game bridge"]
+  B --> P["Phaser presentation"]
+  W -->|"throttled HUD state"| UI
+  SH["Shared serializable contracts"] --- UI
   SH --- W
   SH --- SIM
 ```
 
-- `packages/shared` owns serializable domain and worker contracts.
-- `packages/scripting` owns tokenization, AST construction, validation, diagnostics, and budgeted interpretation.
-- `packages/simulation` owns all authoritative state and rules; it has no React, Phaser, or DOM dependency.
-- `apps/web` owns Monaco, React controls, the worker host, and a thin Phaser view.
+- `packages/shared` owns serializable domain types and worker messages.
+- `packages/scripting` owns parsing, validation, diagnostics, and interpretation.
+- `packages/simulation` owns all authoritative combat state and rules, with no DOM or renderer dependency.
+- `apps/web` owns the React presentation, Monaco editor, worker host, and Phaser view.
 
-The simulation advances at 30 fixed steps per second. It publishes rendering snapshots at 15 Hz; Phaser interpolates positions at render cadence. React is throttled to roughly 5 Hz for HUD data and never rerenders the canvas entity graph.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the worker protocol, state ownership, deterministic replay model, performance model, and trade-offs.
 
-See [Architecture](docs/ARCHITECTURE.md), [Game design](docs/GAME_DESIGN.md), and [Roadmap](docs/ROADMAP.md).
+## Local development
 
-## Why the DSL is safe
+Requirements: Node.js 24 and pnpm 11.9+.
 
-Source text is tokenized and parsed into a typed AST. Static validation accepts only six readable values, six comparison operators, three boolean operators, and five commands. The interpreter walks that AST with a configurable instruction budget. It never uses `eval`, `Function`, dynamic imports, generated JavaScript, or host-object access. Every decision includes the source span of the rule that fired.
+```bash
+pnpm install --frozen-lockfile
+pnpm dev
+```
 
-## Determinism
+Open the URL printed by Vite. No backend, account, environment variable, or external service is required to play locally.
 
-The simulation uses fixed timesteps, stable entity IDs, ordered systems, and a local xorshift32 generator. Authoritative code does not call `Math.random()`. Upgrade selection uses the same seeded generator. A stable FNV-1a checksum covers final state, metrics, and upgrades, making replay regressions observable in tests and on the result screen.
+## Test and verification commands
 
-## Testing strategy
+| Command             | Purpose                                                                             |
+| ------------------- | ----------------------------------------------------------------------------------- |
+| `pnpm verify`       | Run lint, formatting, type checks, unit/integration tests, build, and browser tests |
+| `pnpm test:e2e`     | Run the Playwright gameplay and responsive presentation suite                       |
+| `pnpm build`        | Build every workspace package and the Vite production client                        |
+| `pnpm test`         | Run scripting, simulation, and worker-host tests                                    |
+| `pnpm typecheck`    | Check strict TypeScript across all packages                                         |
+| `pnpm lint`         | Run ESLint                                                                          |
+| `pnpm format:check` | Check Prettier formatting                                                           |
 
-The Vitest suite covers lexical spans, precedence, invalid syntax, first-match behavior, instruction limits, seeded repeatability, combat, cooldowns, damage, death, waves, upgrades, win/loss, metrics, and worker messages. Playwright boots the real app, checks compilation and canvas creation, deploys a short deterministic run, changes speed, pauses, resumes, reaches an upgrade/result state, checks console errors, and validates the 1024×768 layout.
+To run the same browser suite against a deployment:
 
-## Performance decisions
+```bash
+PLAYWRIGHT_BASE_URL=https://swarm-script.vercel.app pnpm test:e2e
+```
 
-- Fixed-size serializable snapshots cross the worker boundary; renderer objects never do.
-- React receives throttled derived data while the Phaser bridge receives every render snapshot.
-- Continuous positions are interpolated to avoid tying presentation to simulation cadence.
-- Phaser and Monaco load as separate runtime chunks; the arena uses one retained static grid plus two reused `Graphics` objects for dynamic world and effects.
-- Entity counts stay bounded per encounter; hot combat loops avoid higher-order allocations where it matters.
-- A development overlay reports simulation rate, render FPS, entity count, snapshot latency, and message rate.
+In PowerShell, use `$env:PLAYWRIGHT_BASE_URL='https://swarm-script.vercel.app'` before the test command.
 
 ## Current limitations
 
+- The playable game requires a desktop viewport at least 1024 pixels wide; smaller screens receive a friendly presentation-only fallback.
 - Balance is an initial portfolio-quality pass, not a broad playtest-derived curve.
-- The rule language has no user variables, functions, squad messages, or step debugger yet.
-- Runs are deterministic but replay files and shareable challenge links are not implemented.
-- Procedural audio is intentionally deferred; the vertical slice is visual-only.
-- Desktop widths below 1024 px and mobile controls are outside v0.1 scope.
+- The rule language has no user variables, functions, robot-to-robot messages, or step debugger.
+- Runs are deterministic, but replay files and shareable challenge links are not implemented.
+- The game is visual-only; audio is not implemented.
+- Procedural geometric rendering is deliberately compact and does not use an external asset pipeline.
 
-## Technical highlights
+## Deployment
 
-Strict TypeScript package boundaries, a hand-built safe language pipeline, fixed-step deterministic simulation, typed Web Worker messages, renderer/simulation separation, and real browser automation make the project useful both as a game and as an engineering portfolio piece.
-
-## Roadmap
-
-The next release deepens script debugging and squad coordination before adding meta-progression, daily challenges, replay sharing, and release preparation. The staged plan lives in [docs/ROADMAP.md](docs/ROADMAP.md).
+The production client is deployed from the repository root with [vercel.json](vercel.json). It installs the committed pnpm lockfile, builds `@swarm-script/web`, serves `apps/web/dist`, and rewrites direct routes to the Vite entry point.
 
 ## License
 

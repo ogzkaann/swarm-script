@@ -4,10 +4,12 @@ export function ResultOverlay({
   result,
   observations,
   onReset,
+  onPresentation,
 }: {
   result: WorldSnapshot;
   observations: string[];
   onReset: () => void;
+  onPresentation: () => void;
 }): React.JSX.Element {
   const metrics = result.metrics;
   return (
@@ -42,9 +44,12 @@ export function ResultOverlay({
             <p key={observation}>↳ {observation}</p>
           ))}
         </div>
-        <button className="primary-button" onClick={onReset}>
-          REVISE &amp; RUN AGAIN
-        </button>
+        <div className="result-actions">
+          <button onClick={onPresentation}>← PRESENTATION</button>
+          <button className="primary-button" onClick={onReset}>
+            REVISE &amp; RUN AGAIN
+          </button>
+        </div>
       </section>
     </div>
   );

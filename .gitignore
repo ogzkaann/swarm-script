@@ -7,3 +7,6 @@ test-results/
 *.log
 .DS_Store
 .env.local
+.vercel/
+
+.vercel

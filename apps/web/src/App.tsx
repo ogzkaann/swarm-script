@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { gameBridge } from './game/GameBridge';
 import { Arena } from './ui/Arena';
 import { CodeEditor } from './ui/CodeEditor';
+import { ArchitecturePage, LandingPage, SwarmLogo } from './ui/Presentation';
 import { ResultOverlay } from './ui/ResultOverlay';
 
 interface FeedItem {
@@ -21,6 +22,43 @@ interface FeedItem {
 }
 
 export default function App(): React.JSX.Element {
+  const [path, setPath] = useState(() => window.location.pathname);
+  const navigate = useCallback((nextPath: string) => {
+    if (window.location.pathname !== nextPath) window.history.pushState({}, '', nextPath);
+    setPath(nextPath);
+    window.scrollTo({ top: 0, behavior: 'auto' });
+  }, []);
+
+  useEffect(() => {
+    const syncPath = (): void => setPath(window.location.pathname);
+    window.addEventListener('popstate', syncPath);
+    return () => window.removeEventListener('popstate', syncPath);
+  }, []);
+
+  useEffect(() => {
+    const onGame = path === '/play';
+    const onArchitecture = path === '/architecture';
+    document.title = onGame
+      ? 'Play Swarm Script — Program the Squad'
+      : onArchitecture
+        ? 'Technical Architecture — Swarm Script'
+        : 'Swarm Script — Program Your Squad';
+    document
+      .querySelector('meta[name="description"]')
+      ?.setAttribute(
+        'content',
+        onArchitecture
+          ? 'Explore the safe scripting, deterministic worker simulation, and renderer architecture behind Swarm Script.'
+          : 'Program a three-robot squad with a safe custom language, then watch the deterministic logic fight through three waves.',
+      );
+  }, [path]);
+
+  if (path === '/play') return <GameScreen navigate={navigate} />;
+  if (path === '/architecture') return <ArchitecturePage navigate={navigate} />;
+  return <LandingPage navigate={navigate} />;
+}
+
+function GameScreen({ navigate }: { navigate: (path: string) => void }): React.JSX.Element {
   const worker = useRef<Worker | null>(null);
   const [scripts, setScripts] = useState<Record<RobotRole, string>>({ ...DEFAULT_SCRIPTS });
   const [activeRobot, setActiveRobot] = useState<RobotRole>('striker');
@@ -156,191 +194,235 @@ export default function App(): React.JSX.Element {
   const activeDiagnostics = diagnostics[activeRobot] ?? [];
 
   return (
-    <main className="app-shell">
-      <header className="brand-bar">
-        <div className="brand-mark" aria-hidden="true">
-          <i />
-          <i />
-          <i />
-        </div>
-        <div>
-          <p>TACTICAL AUTOMATION ROGUELITE</p>
-          <h1>
-            SWARM <span>SCRIPT</span>
-          </h1>
-        </div>
-        <div className="system-status">
-          <i /> WORKER LINK / ONLINE
-        </div>
-      </header>
-      <div className="game-layout">
-        <aside className="script-panel panel-frame">
-          <div className="panel-heading">
-            <span>01</span>
-            <div>
-              <p>SQUAD LOGIC</p>
-              <h2>Behavior editor</h2>
-            </div>
+    <>
+      <main className="app-shell">
+        <header className="brand-bar">
+          <SwarmLogo compact />
+          <div>
+            <p>TACTICAL AUTOMATION ROGUELITE</p>
+            <h1>
+              SWARM <span>SCRIPT</span>
+            </h1>
           </div>
-          <div className="robot-tabs" role="tablist" aria-label="Robot scripts">
-            {ROBOT_ROLES.map((role) => (
-              <button
-                key={role}
-                role="tab"
-                aria-selected={activeRobot === role}
-                onClick={() => setActiveRobot(role)}
-              >
-                <i className={`role-icon ${role}`} />
-                {role}
-                <small>
-                  {diagnostics[role]?.some((item) => item.severity === 'error') ? '!' : '✓'}
-                </small>
-              </button>
-            ))}
-          </div>
-          <CodeEditor
-            key={activeRobot}
-            modelKey={activeRobot}
-            value={scripts[activeRobot]}
-            diagnostics={activeDiagnostics}
-            onChange={(value) => setScripts((current) => ({ ...current, [activeRobot]: value }))}
-          />
-          <div
-            className={`compile-status ${compileSuccess ? 'valid' : 'invalid'}`}
-            data-testid="compile-status"
-          >
-            <i /> <strong>{compileSuccess ? 'ALL SYSTEMS VALID' : 'SCRIPT NEEDS ATTENTION'}</strong>
-            <span>
-              {activeDiagnostics[0]
-                ? `L${activeDiagnostics[0].span.start.line}:${activeDiagnostics[0].span.start.column} ${activeDiagnostics[0].message}`
-                : '3 robot programs compiled safely'}
-            </span>
-          </div>
-          <details className="command-reference">
-            <summary>
-              COMMAND REFERENCE <span>+</span>
-            </summary>
-            <p>
-              <b>Values</b> health · health_percent · energy · enemy.distance · attack_range ·
-              ally_lowest_health
-            </p>
-            <p>
-              <b>Commands</b> attack() · approach() · retreat() · guard() · wait()
-            </p>
-          </details>
-        </aside>
-
-        <Arena
-          snapshot={snapshot}
-          upgrades={upgrades}
-          onUpgrade={chooseUpgrade}
-          reducedMotion={reducedMotion}
-          latency={latency}
-          messageRate={messageRate}
-        />
-
-        <aside className="control-panel panel-frame">
-          <div className="panel-heading">
-            <span>02</span>
-            <div>
-              <p>RUN CONTROL</p>
-              <h2>Deployment</h2>
-            </div>
-          </div>
-          <label className="seed-field">
-            SEED{' '}
-            <input
-              value={seed}
-              disabled={Boolean(running)}
-              type="number"
-              onChange={(event) => setSeed(Number(event.target.value))}
-            />
-          </label>
-          <button
-            className="primary-button run-button"
-            disabled={!compileSuccess || Boolean(running)}
-            onClick={run}
-            data-testid="run-button"
-          >
-            <span>▶</span> DEPLOY SWARM
-          </button>
-          <div className="control-row">
-            <button
-              onClick={togglePause}
-              data-testid="pause-button"
-              disabled={!snapshot || !['running', 'paused'].includes(snapshot.phase)}
+          <nav className="game-nav" aria-label="Game links">
+            <a
+              href="/"
+              onClick={(event) => {
+                event.preventDefault();
+                navigate('/');
+              }}
             >
-              {snapshot?.phase === 'paused' ? '▶ RESUME' : 'Ⅱ PAUSE'}
-            </button>
-            <button onClick={reset} disabled={!snapshot}>
-              ↻ RESET
-            </button>
+              Presentation
+            </a>
+            <a
+              href="/architecture"
+              onClick={(event) => {
+                event.preventDefault();
+                navigate('/architecture');
+              }}
+            >
+              About / Technical Details
+            </a>
+          </nav>
+          <div className="system-status">
+            <i /> WORKER LINK / ONLINE
           </div>
-          <div className="speed-control">
-            <span>SIM SPEED</span>
-            <div>
-              {([1, 2, 4] as const).map((value) => (
+        </header>
+        <div className="game-layout">
+          <aside className="script-panel panel-frame">
+            <div className="panel-heading">
+              <span>01</span>
+              <div>
+                <p>SQUAD LOGIC</p>
+                <h2>Behavior editor</h2>
+              </div>
+            </div>
+            <div className="robot-tabs" role="tablist" aria-label="Robot scripts">
+              {ROBOT_ROLES.map((role) => (
                 <button
-                  key={value}
-                  className={speed === value ? 'active' : ''}
-                  onClick={() => changeSpeed(value)}
+                  key={role}
+                  role="tab"
+                  aria-selected={activeRobot === role}
+                  onClick={() => setActiveRobot(role)}
                 >
-                  {value}×
+                  <i className={`role-icon ${role}`} />
+                  {role}
+                  <small>
+                    {diagnostics[role]?.some((item) => item.severity === 'error') ? '!' : '✓'}
+                  </small>
                 </button>
               ))}
             </div>
-          </div>
-          <section className="metrics-block">
-            <h3>SQUAD TELEMETRY</h3>
-            <MetricLine
-              label="Integrity"
-              value={`${Math.round(snapshot?.squadHealth ?? 380)}`}
-              max={snapshot ? 380 : 380}
+            <CodeEditor
+              key={activeRobot}
+              modelKey={activeRobot}
+              value={scripts[activeRobot]}
+              diagnostics={activeDiagnostics}
+              onChange={(value) => setScripts((current) => ({ ...current, [activeRobot]: value }))}
             />
-            <MetricLine
-              label="Damage"
-              value={`${Math.round(snapshot?.metrics.totalDamage ?? 0)}`}
-            />
-            <MetricLine label="Destroyed" value={`${snapshot?.metrics.enemiesDestroyed ?? 0}`} />
-            <MetricLine label="Commands" value={`${snapshot?.metrics.commandsExecuted ?? 0}`} />
-          </section>
-          <section className="upgrade-stack">
-            <h3>ACTIVE MODS</h3>
-            {appliedUpgrades.length ? (
-              appliedUpgrades.map((upgrade) => (
-                <div key={upgrade.id}>
-                  <i />{' '}
-                  <span>
-                    <b>{upgrade.name}</b>
-                    <small>{upgrade.description}</small>
-                  </span>
-                </div>
-              ))
-            ) : (
-              <p>No protocols installed.</p>
-            )}
-          </section>
-          <section className="event-feed">
-            <h3>EVENT STREAM</h3>
-            {feed.map((item) => (
-              <p key={item.id} className={item.tone}>
-                <time>{String(item.id).padStart(3, '0')}</time>
-                {item.text}
+            <div
+              className={`compile-status ${compileSuccess ? 'valid' : 'invalid'}`}
+              data-testid="compile-status"
+            >
+              <i />{' '}
+              <strong>{compileSuccess ? 'ALL SYSTEMS VALID' : 'SCRIPT NEEDS ATTENTION'}</strong>
+              <span>
+                {activeDiagnostics[0]
+                  ? `L${activeDiagnostics[0].span.start.line}:${activeDiagnostics[0].span.start.column} ${activeDiagnostics[0].message}`
+                  : '3 robot programs compiled safely'}
+              </span>
+            </div>
+            <details className="command-reference">
+              <summary>
+                COMMAND REFERENCE <span>+</span>
+              </summary>
+              <p>
+                <b>Values</b> health · health_percent · energy · enemy.distance · attack_range ·
+                ally_lowest_health
               </p>
-            ))}
-          </section>
-          <label className="motion-toggle">
-            <input
-              type="checkbox"
-              checked={reducedMotion}
-              onChange={(event) => setReducedMotion(event.target.checked)}
-            />
-            <span /> REDUCED MOTION
-          </label>
-        </aside>
-      </div>
-      {result && <ResultOverlay result={result} observations={observations} onReset={reset} />}
-    </main>
+              <p>
+                <b>Commands</b> attack() · approach() · retreat() · guard() · wait()
+              </p>
+            </details>
+          </aside>
+
+          <Arena
+            snapshot={snapshot}
+            upgrades={upgrades}
+            onUpgrade={chooseUpgrade}
+            reducedMotion={reducedMotion}
+            latency={latency}
+            messageRate={messageRate}
+          />
+
+          <aside className="control-panel panel-frame">
+            <div className="panel-heading">
+              <span>02</span>
+              <div>
+                <p>RUN CONTROL</p>
+                <h2>Deployment</h2>
+              </div>
+            </div>
+            <label className="seed-field">
+              SEED{' '}
+              <input
+                value={seed}
+                disabled={Boolean(running)}
+                type="number"
+                onChange={(event) => setSeed(Number(event.target.value))}
+              />
+            </label>
+            <button
+              className="primary-button run-button"
+              disabled={!compileSuccess || Boolean(running)}
+              onClick={run}
+              data-testid="run-button"
+            >
+              <span>▶</span> DEPLOY SWARM
+            </button>
+            <div className="control-row">
+              <button
+                onClick={togglePause}
+                data-testid="pause-button"
+                disabled={!snapshot || !['running', 'paused'].includes(snapshot.phase)}
+              >
+                {snapshot?.phase === 'paused' ? '▶ RESUME' : 'Ⅱ PAUSE'}
+              </button>
+              <button onClick={reset} disabled={!snapshot}>
+                ↻ RESET
+              </button>
+            </div>
+            <div className="speed-control">
+              <span>SIM SPEED</span>
+              <div>
+                {([1, 2, 4] as const).map((value) => (
+                  <button
+                    key={value}
+                    className={speed === value ? 'active' : ''}
+                    onClick={() => changeSpeed(value)}
+                  >
+                    {value}×
+                  </button>
+                ))}
+              </div>
+            </div>
+            <section className="metrics-block">
+              <h3>SQUAD TELEMETRY</h3>
+              <MetricLine
+                label="Integrity"
+                value={`${Math.round(snapshot?.squadHealth ?? 380)}`}
+                max={snapshot ? 380 : 380}
+              />
+              <MetricLine
+                label="Damage"
+                value={`${Math.round(snapshot?.metrics.totalDamage ?? 0)}`}
+              />
+              <MetricLine label="Destroyed" value={`${snapshot?.metrics.enemiesDestroyed ?? 0}`} />
+              <MetricLine label="Commands" value={`${snapshot?.metrics.commandsExecuted ?? 0}`} />
+            </section>
+            <section className="upgrade-stack">
+              <h3>ACTIVE MODS</h3>
+              {appliedUpgrades.length ? (
+                appliedUpgrades.map((upgrade) => (
+                  <div key={upgrade.id}>
+                    <i />{' '}
+                    <span>
+                      <b>{upgrade.name}</b>
+                      <small>{upgrade.description}</small>
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <p>No protocols installed.</p>
+              )}
+            </section>
+            <section className="event-feed">
+              <h3>EVENT STREAM</h3>
+              {feed.map((item) => (
+                <p key={item.id} className={item.tone}>
+                  <time>{String(item.id).padStart(3, '0')}</time>
+                  {item.text}
+                </p>
+              ))}
+            </section>
+            <label className="motion-toggle">
+              <input
+                type="checkbox"
+                checked={reducedMotion}
+                onChange={(event) => setReducedMotion(event.target.checked)}
+              />
+              <span /> REDUCED MOTION
+            </label>
+          </aside>
+        </div>
+        {result && (
+          <ResultOverlay
+            result={result}
+            observations={observations}
+            onReset={reset}
+            onPresentation={() => navigate('/')}
+          />
+        )}
+      </main>
+      <section className="unsupported-screen" role="status">
+        <SwarmLogo />
+        <p>TACTICAL DISPLAY UNAVAILABLE</p>
+        <h1>Swarm Script needs a wider screen.</h1>
+        <span>
+          The behavior editor and arena require at least 1024 pixels. Reopen the game on a desktop
+          or expand this window.
+        </span>
+        <a
+          href="/"
+          onClick={(event) => {
+            event.preventDefault();
+            navigate('/');
+          }}
+        >
+          Return to the presentation
+        </a>
+      </section>
+    </>
   );
 }
 

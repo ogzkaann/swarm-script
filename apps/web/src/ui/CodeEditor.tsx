@@ -1,7 +1,7 @@
 import type { ScriptDiagnostic } from '@swarm-script/shared';
 import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 type MonacoApi = typeof Monaco;
 
@@ -116,43 +116,50 @@ export function CodeEditor({
   const monacoApi = useRef<MonacoApi | null>(null);
   const onChangeRef = useRef(onChange);
   const diagnosticsRef = useRef(diagnostics);
+  const [editorStatus, setEditorStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   onChangeRef.current = onChange;
   diagnosticsRef.current = diagnostics;
 
   useEffect(() => {
     let disposed = false;
     let subscription: Monaco.IDisposable | null = null;
-    void import('monaco-editor/esm/vs/editor/editor.api.js').then((monaco) => {
-      if (disposed || !host.current) return;
-      monacoApi.current = monaco;
-      registerLanguage(monaco);
-      const uri = monaco.Uri.parse(`inmemory://swarm/${modelKey}.swarm`);
-      model.current =
-        monaco.editor.getModel(uri) ?? monaco.editor.createModel(value, 'swarm-script', uri);
-      editor.current = monaco.editor.create(host.current, {
-        model: model.current,
-        theme: 'swarm-night',
-        automaticLayout: true,
-        minimap: { enabled: false },
-        fontFamily: 'Cascadia Code, JetBrains Mono, monospace',
-        fontSize: 13,
-        lineHeight: 20,
-        lineNumbersMinChars: 3,
-        folding: false,
-        glyphMargin: false,
-        scrollBeyondLastLine: false,
-        overviewRulerBorder: false,
-        overviewRulerLanes: 0,
-        padding: { top: 10, bottom: 10 },
-        wordWrap: 'on',
-        tabSize: 2,
-        ariaLabel: `${modelKey} robot script editor`,
+    setEditorStatus('loading');
+    void import('monaco-editor/esm/vs/editor/editor.api.js')
+      .then((monaco) => {
+        if (disposed || !host.current) return;
+        monacoApi.current = monaco;
+        registerLanguage(monaco);
+        const uri = monaco.Uri.parse(`inmemory://swarm/${modelKey}.swarm`);
+        model.current =
+          monaco.editor.getModel(uri) ?? monaco.editor.createModel(value, 'swarm-script', uri);
+        editor.current = monaco.editor.create(host.current, {
+          model: model.current,
+          theme: 'swarm-night',
+          automaticLayout: true,
+          minimap: { enabled: false },
+          fontFamily: 'Cascadia Code, JetBrains Mono, monospace',
+          fontSize: 13,
+          lineHeight: 20,
+          lineNumbersMinChars: 3,
+          folding: false,
+          glyphMargin: false,
+          scrollBeyondLastLine: false,
+          overviewRulerBorder: false,
+          overviewRulerLanes: 0,
+          padding: { top: 10, bottom: 10 },
+          wordWrap: 'on',
+          tabSize: 2,
+          ariaLabel: `${modelKey} robot script editor`,
+        });
+        applyDiagnostics(monaco, model.current, diagnosticsRef.current);
+        subscription = editor.current.onDidChangeModelContent(() =>
+          onChangeRef.current(editor.current?.getValue() ?? ''),
+        );
+        setEditorStatus('ready');
+      })
+      .catch(() => {
+        if (!disposed) setEditorStatus('error');
       });
-      applyDiagnostics(monaco, model.current, diagnosticsRef.current);
-      subscription = editor.current.onDidChangeModelContent(() =>
-        onChangeRef.current(editor.current?.getValue() ?? ''),
-      );
-    });
     return () => {
       disposed = true;
       subscription?.dispose();
@@ -173,7 +180,19 @@ export function CodeEditor({
       applyDiagnostics(monacoApi.current, model.current, diagnostics);
   }, [diagnostics]);
 
-  return <div className="editor-host" ref={host} />;
+  return (
+    <div className="editor-host">
+      <div className="editor-mount" ref={host} />
+      {editorStatus !== 'ready' && (
+        <div className={`chunk-loading ${editorStatus === 'error' ? 'error' : ''}`} role="status">
+          <i />
+          <span>
+            {editorStatus === 'error' ? 'Editor failed to load.' : 'Loading behavior editor…'}
+          </span>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function applyDiagnostics(

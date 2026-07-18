@@ -1,5 +1,5 @@
 import type { UpgradeEffect, WorldSnapshot } from '@swarm-script/shared';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type Phaser from 'phaser';
 
 export function Arena({
@@ -19,19 +19,25 @@ export function Arena({
 }): React.JSX.Element {
   const host = useRef<HTMLDivElement>(null);
   const game = useRef<Phaser.Game | null>(null);
+  const [rendererStatus, setRendererStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const motionPreference = useRef(reducedMotion);
   motionPreference.current = reducedMotion;
 
   useEffect(() => {
     let disposed = false;
-    void import('../game/createGame').then(({ createGame }) => {
-      if (disposed || !host.current) return;
-      const createdGame = createGame(host.current);
-      game.current = createdGame;
-      createdGame.events.once('ready', () =>
-        setSceneReducedMotion(createdGame, motionPreference.current),
-      );
-    });
+    void import('../game/createGame')
+      .then(({ createGame }) => {
+        if (disposed || !host.current) return;
+        const createdGame = createGame(host.current);
+        game.current = createdGame;
+        createdGame.events.once('ready', () => {
+          setSceneReducedMotion(createdGame, motionPreference.current);
+          if (!disposed) setRendererStatus('ready');
+        });
+      })
+      .catch(() => {
+        if (!disposed) setRendererStatus('error');
+      });
     return () => {
       disposed = true;
       game.current?.destroy(true);
@@ -54,6 +60,16 @@ export function Arena({
         <span>{enemyCount.toString().padStart(2, '0')} HOSTILES</span>
       </div>
       <div className="phaser-host" ref={host} data-testid="arena" />
+      {rendererStatus !== 'ready' && (
+        <div className={`chunk-loading ${rendererStatus === 'error' ? 'error' : ''}`} role="status">
+          <i />
+          <span>
+            {rendererStatus === 'error'
+              ? 'Renderer failed to initialize.'
+              : 'Initializing arena renderer…'}
+          </span>
+        </div>
+      )}
       <div className="debug-overlay" aria-label="Development performance overlay">
         <span>SIM 30 Hz</span>
         <span>RENDER {Math.round(game.current?.loop.actualFps ?? 0)} FPS</span>
