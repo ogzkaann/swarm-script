@@ -48,7 +48,7 @@ test('landing, navigation, and deterministic playable flow work at 1440x900', as
   await page.getByTestId('pause-button').click();
   await page.waitForTimeout(650);
   await page.screenshot({
-    path: 'docs/screenshots/swarm-script-gameplay.png',
+    path: 'test-results/swarm-script-gameplay.png',
     fullPage: true,
   });
   await page.getByRole('button', { name: '4×' }).click();
@@ -63,7 +63,7 @@ test('landing, navigation, and deterministic playable flow work at 1440x900', as
   await expect(results).toContainText('RUN ANALYSIS');
   await expect(results).toContainText('Protocol survived.');
   await page.screenshot({
-    path: 'docs/screenshots/swarm-script-victory.png',
+    path: 'test-results/swarm-script-victory.png',
     fullPage: true,
   });
 
