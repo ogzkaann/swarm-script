@@ -1,0 +1,27 @@
+{
+  "name": "@swarm-script/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@swarm-script/shared": "workspace:*",
+    "@swarm-script/scripting": "workspace:*",
+    "@swarm-script/simulation": "workspace:*",
+    "monaco-editor": "0.55.1",
+    "phaser": "4.1.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "latest",
+    "typescript": "^5.8.3",
+    "vite": "8.1.5"
+  }
+}
