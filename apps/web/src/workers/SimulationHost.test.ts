@@ -81,4 +81,31 @@ describe('worker protocol host', () => {
       result: { phase: 'victory', metrics: { wavesCompleted: 3 } },
     });
   });
+
+  it('switches 1×, 2×, and 4× speed without coupling simulation ticks to render frames', () => {
+    const messages: WorkerToMainMessage[] = [];
+    const host = new SimulationHost((message) => messages.push(message));
+    host.handle({
+      type: 'START_RUN',
+      config: { seed: 43105, scripts, reducedMotion: false, shortRun: true },
+    });
+    host.handle({ type: 'SET_SPEED', speed: 1 });
+    host.advanceFrame();
+    host.advanceFrame();
+    host.handle({ type: 'SET_SPEED', speed: 4 });
+    host.advanceFrame();
+    host.handle({ type: 'SET_SPEED', speed: 2 });
+    host.advanceFrame();
+    const ticks = messages
+      .filter((message) => message.type === 'WORLD_SNAPSHOT')
+      .map((message) => message.snapshot.tick);
+    expect(ticks).toEqual([0, 2, 6, 8]);
+    host.handle({ type: 'PAUSE_RUN' });
+    host.advanceFrame();
+    const paused = messages.filter((message) => message.type === 'WORLD_SNAPSHOT').at(-1);
+    expect(paused).toMatchObject({
+      type: 'WORLD_SNAPSHOT',
+      snapshot: { tick: 8, phase: 'paused' },
+    });
+  });
 });

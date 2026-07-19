@@ -1,42 +1,46 @@
 # Roadmap
 
-## v0.1 — Playable vertical slice
+## v0.1 — Playable vertical slice (complete)
 
 - Safe rule DSL with spans, diagnostics, validation, and an instruction budget
-- Deterministic worker-owned simulation and three-wave run
+- Deterministic worker-owned three-wave simulation
 - React, Monaco, and Phaser integration
-- Procedural game feel, upgrade choices, analysis, tests, CI, and documentation
+- Seeded upgrades, analysis, CI, deployment, and documentation
 
-## v0.2 — Deeper scripting and debugging
+## v0.2 — Tactical depth and reliable presentation (complete)
+
+- Latest-only render mailbox and reliable 1×/2×/4× speed switching
+- Faster acceleration-based movement, separation, knockback, trails, and readable facing
+- Programmable Overcharge, Shield, and Mark with sensors, energy, cooldowns, traces, and metrics
+- Swarmer, Sniper, Splitter, Bulwark, and Commander behaviors
+- Fifteen synergistic upgrade protocols and final-build analysis
+- Shared death feedback pipeline with event deduplication
+- Procedural audio, mute/volume persistence, and reduced motion
+- Multi-seed balance harness, expanded automated coverage, and updated screenshots/docs
+
+## v0.3 — Deeper scripting and debugging
 
 - Step-through decision timeline linked to source
 - Watch panel for sensor values at each decision
 - User-defined constants and small reusable predicates
 - Squad signals with deterministic delivery order
 - Script templates, undoable examples, and improved onboarding
-- Balance pass informed by repeatable playtest telemetry
+- Human playtest telemetry and difficulty presets
 
-## v0.3 — Roguelite progression
+## v0.4 — Roguelite progression
 
 - Additional chassis, weapons, enemies, and arena modifiers
 - Run drafting that unlocks new sensors and commands
 - Local profile progression and challenge milestones
 - More encounter compositions and elite behaviors
 
-## v0.4 — Daily challenges and replay sharing
+## v0.5 — Challenges, replay, and release preparation
 
 - Versioned replay files containing seed, scripts, and upgrade choices
-- Daily seeded scenarios
-- Shareable local challenge links and checksum verification
-- Deterministic replay viewer with trace scrubbing
-
-Cloud leaderboards would require a separately scoped service and abuse model; they are not assumed by this stage.
-
-## v0.5 — Content, balance, and release preparation
-
-- Broader content set and structured difficulty curve
+- Daily seeded scenarios and shareable local challenge links
+- Deterministic replay viewer with trace scrubbing and checksum verification
 - Accessibility and performance audits across supported browsers
-- Audio, settings persistence, onboarding, and production error handling
-- Store-ready presentation, localization groundwork, and release QA
+- Broader procedural audio palette, settings UX, onboarding, and production error handling
+- Store-ready presentation and localization groundwork
 
-Accounts, multiplayer, PvP, mod marketplaces, monetization, and platform packaging require explicit future product decisions and are not part of the current plan.
+Accounts, multiplayer, PvP, cloud leaderboards, marketplaces, monetization, and platform packaging require separate product and abuse-model decisions. They are not assumed by this roadmap.

@@ -11,7 +11,16 @@ import type {
 } from './ast';
 import { tokenize, type Token, type TokenType } from './tokenizer';
 
-const commands = new Set<CommandName>(['attack', 'approach', 'retreat', 'guard', 'wait']);
+const commands = new Set<CommandName>([
+  'attack',
+  'approach',
+  'retreat',
+  'guard',
+  'wait',
+  'overcharge',
+  'shield',
+  'mark',
+]);
 const variables = new Set([
   'health',
   'health_percent',
@@ -19,6 +28,10 @@ const variables = new Set([
   'enemy.distance',
   'attack_range',
   'ally_lowest_health',
+  'ability_ready',
+  'ability_cooldown',
+  'enemy.marked',
+  'allies_under_threat',
 ]);
 
 class ParseFailure extends Error {

@@ -8,6 +8,10 @@ const context = {
   'enemy.distance': 80,
   attack_range: 100,
   ally_lowest_health: 70,
+  ability_ready: 1,
+  ability_cooldown: 0,
+  'enemy.marked': 0,
+  allies_under_threat: 0,
 };
 
 describe('tokenizer and parser', () => {
@@ -70,5 +74,20 @@ describe('interpreter', () => {
       );
       expect(executeProgram(compiled.program!, context).command).toBe('guard');
     }
+  });
+
+  it('supports role abilities and tactical sensors without dynamic execution', () => {
+    const compiled = compileScript(
+      'when ability_ready == 1 and enemy.marked == 0 { mark(); } otherwise { shield(); }',
+    );
+    expect(executeProgram(compiled.program!, context).command).toBe('mark');
+    expect(
+      executeProgram(compiled.program!, {
+        ...context,
+        ability_ready: 0,
+        'enemy.marked': 1,
+      }).command,
+    ).toBe('shield');
+    expect(compileScript('otherwise { overcharge(); }').program).not.toBeNull();
   });
 });

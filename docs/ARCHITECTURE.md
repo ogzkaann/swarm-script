@@ -2,28 +2,58 @@
 
 ## Package boundaries
 
-`shared` contains only serializable contracts. `scripting` depends on those spans and command names. `simulation` depends on shared contracts and the safe interpreter. `web` depends on all three, but no lower package depends on React, Phaser, workers, or browser APIs.
+`shared` contains serializable contracts. `scripting` owns the safe language. `simulation` depends on those contracts and the interpreter. `web` depends on all three, but no lower package depends on React, Phaser, Web Workers, Web Audio, or browser APIs.
 
-This dependency direction keeps authoritative rules testable in Node and prevents renderer lifetimes from leaking into game state.
+This direction keeps combat authoritative and testable in Node while presentation can be destroyed or delayed without changing a run.
 
 ## Worker boundary
 
-The main thread sends compile, run control, speed, upgrade, and reset messages. `SimulationHost` converts them into scripting and simulation operations. The browser worker advances one 30 Hz frame timer and can run 1, 2, or 4 fixed simulation steps per timer callback.
+The main thread sends compile, run control, speed, upgrade, and reset messages. `SimulationHost` advances one 30 Hz timer and performs exactly 1, 2, or 4 fixed simulation steps per callback. Speed changes therefore alter simulation throughput, never `dt` or authoritative rules.
 
 Worker responses separate concerns:
 
-- `WORLD_SNAPSHOT` drives Phaser at 15 Hz and a throttled React HUD at roughly 5 Hz.
-- `DECISION_TRACE` drives short source-command labels.
-- phase messages drive upgrades, event feed entries, and results.
+- `WORLD_SNAPSHOT` carries immutable world state, retained combat events, metrics, and the applied build.
+- `DECISION_TRACE` identifies the chosen source span, whether it executed, and a failure reason when blocked.
+- phase messages drive upgrades, the event feed, and results.
 - compile messages carry per-robot diagnostics with exact source spans.
 
-The host is independently integration-tested without constructing a browser Worker.
+The host is integration-tested without constructing a browser Worker, including the exact tick sequence across 1×, 2×, 4×, and pause.
+
+## Rendering-freeze root cause and fix
+
+In v0.1, every arriving snapshot synchronously notified `BattleScene`. At higher simulation speeds, snapshots could arrive faster than a frame could present them. The scene restarted interpolation from the simulation's previous-tick coordinates for each notification, so queued snapshots repeatedly reset visible movement. Entity disappearance was also inferred separately on each snapshot; repeated transitions could extend hit-stop and recreate work while the worker continued correctly.
+
+v0.2 makes the boundary explicitly lossy for state and reliable for events:
+
+1. `GameBridge.publishSnapshot()` replaces one pending snapshot slot. It never grows a queue.
+2. `BattleScene.update()` consumes at most one newest snapshot per browser frame.
+3. Interpolation begins at the entity's currently rendered position and targets the newest authoritative position.
+4. Combat events remain in snapshots for a short tick window and carry unique IDs.
+5. The renderer deduplicates event IDs, so dropped state snapshots do not lose deaths, while repeated snapshots cannot replay audio, shake, or hit-stop.
+6. A debug overlay exposes simulation speed, render FPS, received tick, drawn tick, snapshot age, dropped snapshots, and message rate.
+
+The worker can now advance independently at 4× while the display remains responsive. Dropped intermediate state is expected; the newest state is authoritative.
+
+```mermaid
+sequenceDiagram
+  participant S as 30 Hz simulation
+  participant W as Worker postMessage
+  participant M as Latest-only mailbox
+  participant R as Phaser frame
+  S->>W: immutable snapshot N
+  W->>M: replace pending snapshot
+  S->>W: immutable snapshot N+1
+  W->>M: replace N, increment dropped
+  R->>M: consume N+1 once
+  R->>R: interpolate from rendered pose
+  R->>R: dedupe retained event IDs
+```
 
 ## Simulation/render separation
 
-`SwarmSimulation` owns positions, health, energy, cooldowns, targeting, projectiles, waves, upgrades, phases, metrics, and checksums. Phaser receives immutable snapshots through `GameBridge`. `BattleScene` turns snapshots into geometry and effects; it cannot change authoritative entities.
+`SwarmSimulation` owns positions, velocity, facing, health, energy, cooldowns, abilities, targeting, projectiles, archetype state, waves, upgrades, phases, events, metrics, and checksums. Phaser can only interpret snapshots.
 
-The renderer interpolates between each entity's previous and current fixed-step position. Death bursts and labels are disposable view state. Losing them cannot alter a run.
+`BattleScene` owns geometry, labels, trails, telegraphs, marks, shield rings, flashes, fragments, camera movement, hit-stop, and calls into procedural audio. A reusable death presenter handles every archetype with an intensity tier. All transient objects have bounded lifetimes and collection caps.
 
 ## DSL pipeline
 
@@ -34,45 +64,53 @@ flowchart LR
   P --> A["Typed AST"]
   A --> V["Static validation"]
   V --> I["Budgeted interpreter"]
-  I --> D["Command + executed span"]
+  I --> D["Command + executed span/reason"]
 ```
 
-The grammar gives `not` higher precedence than `and`, and `and` higher precedence than `or`. Comparisons accept numeric literals or whitelisted sensor values. Rules run in source order and the first match wins. `otherwise` has a null condition and acts as a fallback.
+`not` binds tighter than `and`, and `and` tighter than `or`. Comparisons accept literals or whitelisted sensors. Rules run in source order; the first match wins. `otherwise` is the fallback. Unknown characters, syntax, values, and commands produce diagnostics. Budget exhaustion returns `wait()`.
 
-Unknown characters, syntax, values, and commands create human-readable diagnostics. The interpreter spends budget units while visiting rules and expressions. Budget exhaustion returns `wait()` rather than executing unbounded work.
+v0.2 adds role commands `overcharge()`, `shield()`, and `mark()` plus tactical sensors without adding any dynamic execution path.
 
 ## State ownership
 
-- React: scripts being edited, control selection, low-frequency display values, overlays, accessibility settings
-- Worker: compiled ASTs, run instance, simulation speed
-- Simulation: complete authoritative run state
-- Phaser: graphics, transient labels, bursts, camera/presentation timing
+- **React:** editable scripts, selected controls, throttled display state, overlays, volume/mute, and reduced-motion preference.
+- **Worker:** compiled ASTs, run instance, and selected simulation speed.
+- **Simulation:** complete authoritative run and deterministic event history.
+- **GameBridge:** one pending snapshot, traces, and observed render-transport metrics.
+- **Phaser:** visual objects and presentation timing.
+- **AudioEngine:** lazily unlocked browser audio graph and non-authoritative sound throttling.
 
-No mutable global game state exists. The bridge is a scoped event boundary and carries snapshots only.
+## Determinism
 
-## Deterministic replay model
+A run is a function of version, script ASTs, numeric seed, and ordered upgrade choices. The simulation:
 
-Runs are functions of script ASTs, numeric seed, and ordered upgrade choices. The simulation:
-
-- advances only in 1/30-second steps;
-- uses xorshift32 instead of `Math.random()`;
+- advances only in 1/30-second fixed steps;
+- uses xorshift32, never `Math.random()`;
 - assigns monotonically increasing stable IDs;
-- resolves actors and projectiles in stable array order;
-- chooses upgrades from the seeded generator;
-- produces an FNV-1a checksum from stable final-state data.
+- resolves actors, projectiles, splits, chains, and upgrades in stable order;
+- records unique combat-event IDs;
+- hashes stable final-state and build data with FNV-1a.
 
-Wall-clock time affects presentation and worker scheduling, not authoritative integration. A future replay file needs only version, seed, scripts, and upgrade selections.
+Wall-clock scheduling, render FPS, audio, reduced motion, and dropped snapshots do not affect the checksum.
 
 ## Performance model
 
-The vertical slice bounds entities to a compact three-wave encounter. A static Phaser `Graphics` object holds the arena; reused dynamic objects draw actors and effects. Snapshots are intentionally plain structured-clone data with no histories or renderer metadata. React updates are throttled separately from canvas updates.
+Simulation runs at 30 Hz and decisions at 5 Hz. Snapshots are emitted at a bounded rate and are plain structured-clone data. The main thread intentionally keeps no snapshot history. React HUD state is separately throttled, and Phaser renders at browser cadence.
 
-Simulation rate is 30 Hz, decision rate is 5 Hz, render snapshots are 15 Hz, and normal display cadence is the browser's frame rate. These values keep decisions legible, combat responsive, and worker traffic modest.
+The arena background is static geometry. Actor/effect graphics are reused where practical, transient collections are capped, processed event IDs are pruned, and audio has per-type stacking limits. Full snapshots remain simpler and safer than deltas at this entity count.
 
-## Important trade-offs
+## Testing boundaries
 
-- Full snapshots are simpler and safer than state deltas at this entity count. A larger game should add versioned deltas.
-- Graphics primitives make iteration and silhouette tuning fast but do not yet use instanced GPU layers.
-- A direct Monaco integration avoids a wrapper dependency, though editor payload remains the largest client cost.
-- Collision is targeted projectile arrival rather than a physics engine; this preserves determinism and fits the initial combat model.
-- The debug overlay is currently always visible as a portfolio surface; a production release should gate it behind a developer flag.
+- DSL tests verify syntax, precedence, allowed commands/sensors, diagnostics, and the absence of dynamic execution.
+- Simulation tests verify deterministic checksums, split children, all archetypes, Commander telegraphs, ability resources, upgrades, one death event per entity, victory, and defeat.
+- The balance harness runs a repeatable multi-seed cohort and reports outcomes, duration, contribution, abilities, upgrades, and failure causes.
+- Worker tests verify protocol transitions and speed/pause tick behavior.
+- Bridge tests verify newest-only consumption and dropped-snapshot accounting.
+- Playwright verifies the real lazy-loaded worker/Monaco/Phaser path, rapid speed switching, settings, screenshots, direct routes, responsive behavior, and browser errors.
+
+## Trade-offs
+
+- Full snapshots are appropriate for this bounded arena; a larger game should add versioned deltas without reintroducing a replay queue.
+- Procedural primitives and synthesized audio provide consistent feedback with no asset licensing or loading cost, but limit visual and sonic variety.
+- Targeted projectile arrival avoids a physics engine and preserves determinism, but does not model continuous collision bodies.
+- The performance overlay is intentionally visible for v0.2 validation; a consumer release would gate it behind a developer setting.

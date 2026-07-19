@@ -1,5 +1,8 @@
 export type RobotRole = 'striker' | 'guardian' | 'scout';
-export type CommandName = 'attack' | 'approach' | 'retreat' | 'guard' | 'wait';
+export type AbilityName = 'overcharge' | 'shield' | 'mark';
+export type CommandName = 'attack' | 'approach' | 'retreat' | 'guard' | 'wait' | AbilityName;
+export type EnemyArchetype =
+  'swarmer' | 'sniper' | 'splitter' | 'splitter-child' | 'bulwark' | 'commander';
 export type RunPhase = 'idle' | 'running' | 'paused' | 'upgrade' | 'victory' | 'defeat';
 
 export interface SourcePosition {
@@ -38,6 +41,44 @@ export interface EntitySnapshot {
   maxHealth: number;
   team: 'squad' | 'hostile';
   flash: boolean;
+  archetype?: EnemyArchetype;
+  facing: number;
+  velocityX: number;
+  velocityY: number;
+  abilityActive?: AbilityName;
+  abilityCooldown?: number;
+  energy?: number;
+  maxEnergy?: number;
+  marked?: boolean;
+  shielded?: boolean;
+  elite?: boolean;
+  telegraph?: number;
+}
+
+export type CombatEventType =
+  | 'shot'
+  | 'impact'
+  | 'death'
+  | 'ability'
+  | 'wave-start'
+  | 'wave-end'
+  | 'upgrade'
+  | 'victory'
+  | 'defeat';
+
+export interface CombatEvent {
+  id: number;
+  tick: number;
+  type: CombatEventType;
+  x: number;
+  y: number;
+  team?: 'squad' | 'hostile';
+  role?: RobotRole;
+  archetype?: EnemyArchetype;
+  ability?: AbilityName;
+  targetId?: string;
+  finalInWave?: boolean;
+  intensity: 'light' | 'medium' | 'heavy' | 'boss';
 }
 
 export interface RunMetrics {
@@ -49,6 +90,12 @@ export interface RunMetrics {
   commandsExecuted: number;
   idleDecisions: number;
   perRobot: Record<RobotRole, RobotMetrics>;
+  abilitiesUsed: Record<RobotRole, number>;
+  shieldDamageBlocked: number;
+  markedBonusDamage: number;
+  sniperDamage: number;
+  splitChildrenDestroyed: number;
+  failureCause?: string;
 }
 
 export interface RobotMetrics {
@@ -58,14 +105,33 @@ export interface RobotMetrics {
   waits: number;
   retreatsAbove80: number;
   attacksOutOfRange: number;
+  abilityAttempts: number;
+  abilityFailures: number;
 }
 
 export interface UpgradeEffect {
   id: string;
   name: string;
   description: string;
-  stat: 'damage' | 'range' | 'speed' | 'health' | 'energyRegen' | 'cooldown';
-  multiplier: number;
+  effect:
+    | 'damage'
+    | 'range'
+    | 'health'
+    | 'chain'
+    | 'overchargeBlast'
+    | 'shieldReflect'
+    | 'markSpread'
+    | 'markedEnergy'
+    | 'criticalSlow'
+    | 'pierce'
+    | 'closeExplosion'
+    | 'lowHealthSpeed'
+    | 'guardianBattery'
+    | 'scoutEvasion'
+    | 'isolatedDamage';
+  multiplier?: number;
+  role?: RobotRole;
+  synergy: string;
 }
 
 export interface WorldSnapshot {
@@ -77,6 +143,8 @@ export interface WorldSnapshot {
   squadHealth: number;
   metrics: RunMetrics;
   checksum?: string;
+  events: CombatEvent[];
+  appliedUpgrades: UpgradeEffect[];
 }
 
 export interface DecisionTrace {
@@ -85,6 +153,8 @@ export interface DecisionTrace {
   robot: RobotRole;
   command: CommandName;
   span: SourceSpan;
+  executed: boolean;
+  reason?: string;
 }
 
 export interface RunConfig {
@@ -124,6 +194,10 @@ export const DEFAULT_SCRIPTS: Record<RobotRole, string> = {
   retreat();
 }
 
+when ability_ready == 1 and energy >= 45 {
+  overcharge();
+}
+
 when enemy.distance <= attack_range {
   attack();
 }
@@ -132,7 +206,11 @@ otherwise {
   approach();
 }`,
   guardian: `when ally_lowest_health < 35 and health_percent > 45 {
-  guard();
+  shield();
+}
+
+when allies_under_threat >= 2 and ability_ready == 1 {
+  shield();
 }
 
 when enemy.distance <= attack_range {
@@ -144,6 +222,10 @@ otherwise {
 }`,
   scout: `when health_percent < 25 {
   retreat();
+}
+
+when enemy.marked == 0 and ability_ready == 1 {
+  mark();
 }
 
 when energy >= 18 and enemy.distance <= attack_range {

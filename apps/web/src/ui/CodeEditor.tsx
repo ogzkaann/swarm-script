@@ -1,4 +1,4 @@
-import type { ScriptDiagnostic } from '@swarm-script/shared';
+import type { DecisionTrace, ScriptDiagnostic } from '@swarm-script/shared';
 import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import { useEffect, useRef, useState } from 'react';
@@ -43,8 +43,21 @@ function registerLanguage(monaco: MonacoApi): void {
         'enemy.distance',
         'attack_range',
         'ally_lowest_health',
+        'ability_ready',
+        'ability_cooldown',
+        'enemy.marked',
+        'allies_under_threat',
       ];
-      const commands = ['attack()', 'approach()', 'retreat()', 'guard()', 'wait()'];
+      const commands = [
+        'attack()',
+        'approach()',
+        'retreat()',
+        'guard()',
+        'wait()',
+        'overcharge()',
+        'shield()',
+        'mark()',
+      ];
       return {
         suggestions: [
           ...values.map((label) => ({
@@ -104,16 +117,19 @@ export function CodeEditor({
   onChange,
   diagnostics,
   modelKey,
+  activeTrace,
 }: {
   value: string;
   onChange: (value: string) => void;
   diagnostics: ScriptDiagnostic[];
   modelKey: string;
+  activeTrace: DecisionTrace | undefined;
 }): React.JSX.Element {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const model = useRef<Monaco.editor.ITextModel | null>(null);
   const monacoApi = useRef<MonacoApi | null>(null);
+  const traceDecorations = useRef<Monaco.editor.IEditorDecorationsCollection | null>(null);
   const onChangeRef = useRef(onChange);
   const diagnosticsRef = useRef(diagnostics);
   const [editorStatus, setEditorStatus] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -152,6 +168,9 @@ export function CodeEditor({
           ariaLabel: `${modelKey} robot script editor`,
         });
         applyDiagnostics(monaco, model.current, diagnosticsRef.current);
+        traceDecorations.current = editor.current.createDecorationsCollection(
+          activeTrace ? traceDecoration(monaco, activeTrace) : [],
+        );
         subscription = editor.current.onDidChangeModelContent(() =>
           onChangeRef.current(editor.current?.getValue() ?? ''),
         );
@@ -168,6 +187,7 @@ export function CodeEditor({
       editor.current = null;
       model.current = null;
       monacoApi.current = null;
+      traceDecorations.current = null;
     };
   }, [modelKey]);
 
@@ -179,6 +199,13 @@ export function CodeEditor({
     if (monacoApi.current && model.current)
       applyDiagnostics(monacoApi.current, model.current, diagnostics);
   }, [diagnostics]);
+
+  useEffect(() => {
+    if (monacoApi.current && traceDecorations.current)
+      traceDecorations.current.set(
+        activeTrace ? traceDecoration(monacoApi.current, activeTrace) : [],
+      );
+  }, [activeTrace]);
 
   return (
     <div className="editor-host">
@@ -193,6 +220,25 @@ export function CodeEditor({
       )}
     </div>
   );
+}
+
+function traceDecoration(
+  monaco: MonacoApi,
+  trace: DecisionTrace,
+): Monaco.editor.IModelDeltaDecoration[] {
+  return [
+    {
+      range: new monaco.Range(trace.span.start.line, 1, trace.span.start.line, 1),
+      options: {
+        isWholeLine: true,
+        className: trace.executed ? 'active-rule-line' : 'blocked-rule-line',
+        overviewRuler: {
+          color: trace.executed ? '#61e8d5' : '#ff786c',
+          position: monaco.editor.OverviewRulerLane.Left,
+        },
+      },
+    },
+  ];
 }
 
 function applyDiagnostics(

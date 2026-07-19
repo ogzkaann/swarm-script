@@ -1,6 +1,9 @@
 import type {
+  AbilityName,
+  CombatEvent,
   CommandName,
   DecisionTrace,
+  EnemyArchetype,
   EntitySnapshot,
   RobotMetrics,
   RobotRole,
@@ -25,6 +28,11 @@ interface Actor {
   y: number;
   previousX: number;
   previousY: number;
+  velocityX: number;
+  velocityY: number;
+  facing: number;
+  knockbackX: number;
+  knockbackY: number;
   radius: number;
   health: number;
   maxHealth: number;
@@ -34,6 +42,7 @@ interface Actor {
   attackCooldown: number;
   cooldownRemaining: number;
   hitFlashTicks: number;
+  lastDamageTick: number;
 }
 
 interface Robot extends Actor {
@@ -43,10 +52,22 @@ interface Robot extends Actor {
   energyRegen: number;
   command: CommandName;
   guarding: boolean;
+  abilityCooldown: number;
+  abilityTicks: number;
+  dashTicks: number;
+  dashCooldown: number;
+  shotCount: number;
 }
 
 interface Enemy extends Actor {
+  archetype: EnemyArchetype;
   targetId: string;
+  markTicks: number;
+  telegraphTicks: number;
+  slowTicks: number;
+  elite: boolean;
+  lastHitOwnerId: string;
+  splitDepth: number;
 }
 
 interface Projectile {
@@ -55,15 +76,20 @@ interface Projectile {
   y: number;
   previousX: number;
   previousY: number;
+  velocityX: number;
+  velocityY: number;
+  facing: number;
   radius: number;
   targetId: string;
   ownerId: string;
   team: 'squad' | 'hostile';
   damage: number;
   speed: number;
+  chainRemaining: number;
+  pierceRemaining: number;
+  critical: boolean;
+  hitIds: string[];
 }
-
-type InternalMetrics = RunMetrics;
 
 export interface SimulationOptions {
   seed: number;
@@ -85,7 +111,15 @@ const emptyRobotMetrics = (): RobotMetrics => ({
   waits: 0,
   retreatsAbove80: 0,
   attacksOutOfRange: 0,
+  abilityAttempts: 0,
+  abilityFailures: 0,
 });
+
+const roleAbility: Record<RobotRole, AbilityName> = {
+  striker: 'overcharge',
+  guardian: 'shield',
+  scout: 'mark',
+};
 
 export class SwarmSimulation {
   readonly fixedRate = FIXED_RATE;
@@ -99,9 +133,11 @@ export class SwarmSimulation {
   private wave = 0;
   private phase: RunPhase = 'idle';
   private nextEntityId = 1;
+  private nextEventId = 1;
   private availableUpgrades: UpgradeEffect[] = [];
   private appliedUpgrades: UpgradeEffect[] = [];
-  private metrics: InternalMetrics = this.createMetrics();
+  private combatEvents: CombatEvent[] = [];
+  private metrics: RunMetrics = this.createMetrics();
 
   constructor(options: SimulationOptions) {
     this.random = new SeededRandom(options.seed);
@@ -131,6 +167,7 @@ export class SwarmSimulation {
     this.applyUpgrade(upgrade);
     this.appliedUpgrades.push(upgrade);
     this.availableUpgrades = [];
+    this.emit('upgrade', ARENA_WIDTH / 2, ARENA_HEIGHT / 2, 'medium');
     this.spawnWave(this.wave + 1);
     this.phase = 'running';
     return true;
@@ -148,11 +185,13 @@ export class SwarmSimulation {
     this.moveRobots();
     this.updateEnemyAI();
     this.updateProjectiles();
-    this.updateCooldownsAndFlashes();
+    this.updateTimers();
     this.removeDeadEntities();
 
     if (this.robots.length === 0) {
       this.phase = 'defeat';
+      this.metrics.failureCause = this.inferFailureCause();
+      this.emit('defeat', ARENA_WIDTH / 2, ARENA_HEIGHT / 2, 'heavy');
       const snapshot = this.snapshot();
       snapshot.checksum = this.checksum();
       events.runCompleted = { snapshot, observations: this.observations() };
@@ -162,8 +201,10 @@ export class SwarmSimulation {
     ) {
       this.metrics.wavesCompleted = this.wave;
       events.waveCompleted = this.wave;
+      this.emit('wave-end', ARENA_WIDTH / 2, ARENA_HEIGHT / 2, 'heavy');
       if (this.wave >= 3) {
         this.phase = 'victory';
+        this.emit('victory', ARENA_WIDTH / 2, ARENA_HEIGHT / 2, 'boss');
         const snapshot = this.snapshot();
         snapshot.checksum = this.checksum();
         events.runCompleted = { snapshot, observations: this.observations() };
@@ -186,24 +227,39 @@ export class SwarmSimulation {
         y: robot.y,
         previousX: robot.previousX,
         previousY: robot.previousY,
+        velocityX: robot.velocityX,
+        velocityY: robot.velocityY,
+        facing: robot.facing,
         radius: robot.radius,
         health: robot.health,
         maxHealth: robot.maxHealth,
         team: 'squad' as const,
         flash: robot.hitFlashTicks > 0,
+        ...(robot.abilityTicks > 0 ? { abilityActive: roleAbility[robot.role] } : {}),
+        abilityCooldown: robot.abilityCooldown,
+        energy: robot.energy,
+        maxEnergy: robot.maxEnergy,
+        shielded: this.isShielded(robot),
       })),
       ...this.enemies.map((enemy) => ({
         id: enemy.id,
         kind: 'enemy' as const,
+        archetype: enemy.archetype,
         x: enemy.x,
         y: enemy.y,
         previousX: enemy.previousX,
         previousY: enemy.previousY,
+        velocityX: enemy.velocityX,
+        velocityY: enemy.velocityY,
+        facing: enemy.facing,
         radius: enemy.radius,
         health: enemy.health,
         maxHealth: enemy.maxHealth,
         team: 'hostile' as const,
         flash: enemy.hitFlashTicks > 0,
+        marked: enemy.markTicks > 0,
+        elite: enemy.elite,
+        telegraph: enemy.telegraphTicks > 0 ? enemy.telegraphTicks / 24 : 0,
       })),
       ...this.projectiles.map((projectile) => ({
         id: projectile.id,
@@ -212,6 +268,9 @@ export class SwarmSimulation {
         y: projectile.y,
         previousX: projectile.previousX,
         previousY: projectile.previousY,
+        velocityX: projectile.velocityX,
+        velocityY: projectile.velocityY,
+        facing: projectile.facing,
         radius: projectile.radius,
         health: 1,
         maxHealth: 1,
@@ -227,15 +286,19 @@ export class SwarmSimulation {
       entities,
       squadHealth: this.robots.reduce((sum, robot) => sum + robot.health, 0),
       metrics: structuredClone(this.metrics),
+      events: this.combatEvents.filter((event) => event.tick >= this.tick - 120),
+      appliedUpgrades: [...this.appliedUpgrades],
     };
   }
 
   getPhase(): RunPhase {
     return this.phase;
   }
+
   getUpgradeOptions(): UpgradeEffect[] {
     return [...this.availableUpgrades];
   }
+
   getAppliedUpgrades(): UpgradeEffect[] {
     return [...this.appliedUpgrades];
   }
@@ -249,14 +312,19 @@ export class SwarmSimulation {
         robot.id,
         round(robot.x),
         round(robot.y),
+        round(robot.velocityX),
+        round(robot.velocityY),
         round(robot.health),
         round(robot.energy),
+        round(robot.abilityCooldown),
       ]),
       enemies: this.enemies.map((enemy) => [
         enemy.id,
+        enemy.archetype,
         round(enemy.x),
         round(enemy.y),
         round(enemy.health),
+        enemy.markTicks,
       ]),
       metrics: this.metrics,
       upgrades: this.appliedUpgrades.map((upgrade) => upgrade.id),
@@ -277,12 +345,14 @@ export class SwarmSimulation {
     this.wave = 0;
     this.phase = 'idle';
     this.nextEntityId = 1;
+    this.nextEventId = 1;
     this.availableUpgrades = [];
     this.appliedUpgrades = [];
+    this.combatEvents = [];
     this.metrics = this.createMetrics();
   }
 
-  private createMetrics(): InternalMetrics {
+  private createMetrics(): RunMetrics {
     return {
       elapsedSeconds: 0,
       wavesCompleted: 0,
@@ -296,6 +366,11 @@ export class SwarmSimulation {
         guardian: emptyRobotMetrics(),
         scout: emptyRobotMetrics(),
       },
+      abilitiesUsed: { striker: 0, guardian: 0, scout: 0 },
+      shieldDamageBlocked: 0,
+      markedBonusDamage: 0,
+      sniperDamage: 0,
+      splitChildrenDestroyed: 0,
     };
   }
 
@@ -312,65 +387,117 @@ export class SwarmSimulation {
       y,
       previousX: x,
       previousY: y,
+      velocityX: 0,
+      velocityY: 0,
+      facing: 0,
+      knockbackX: 0,
+      knockbackY: 0,
       radius: role === 'guardian' ? 18 : 15,
       health: stats.maxHealth,
       maxHealth: stats.maxHealth,
       speed: stats.speed,
       damage: stats.damage,
       attackRange: stats.attackRange,
-      attackCooldown: role === 'scout' ? 0.72 : 0.9,
+      attackCooldown: role === 'scout' ? 0.62 : role === 'striker' ? 0.76 : 0.9,
       cooldownRemaining: 0,
+      hitFlashTicks: 0,
+      lastDamageTick: -9999,
       energy: 100,
       maxEnergy: 100,
-      energyRegen: role === 'scout' ? 13 : 10,
+      energyRegen: role === 'scout' ? 16 : 13,
       command: 'wait',
       guarding: false,
-      hitFlashTicks: 0,
+      abilityCooldown: 0,
+      abilityTicks: 0,
+      dashTicks: 0,
+      dashCooldown: 0,
+      shotCount: 0,
     });
     this.robots = [
-      create('striker', 390, 260, { maxHealth: 115, speed: 92, damage: 27, attackRange: 185 }),
-      create('guardian', 355, 310, { maxHealth: 175, speed: 72, damage: 17, attackRange: 155 }),
-      create('scout', 420, 330, { maxHealth: 90, speed: 125, damage: 19, attackRange: 165 }),
+      create('striker', 390, 260, { maxHealth: 140, speed: 150, damage: 26, attackRange: 185 }),
+      create('guardian', 355, 310, { maxHealth: 220, speed: 118, damage: 17, attackRange: 160 }),
+      create('scout', 420, 330, { maxHealth: 110, speed: 195, damage: 19, attackRange: 175 }),
     ];
   }
 
   private spawnWave(wave: number): void {
     this.wave = wave;
-    const count = this.shortRun ? 1 : ([0, 10, 14, 18][wave] ?? 18);
-    for (let index = 0; index < count; index += 1) {
-      const edge = index % 4;
-      const margin = 34;
-      const x =
-        edge === 0
-          ? margin
-          : edge === 2
-            ? ARENA_WIDTH - margin
-            : this.random.between(70, ARENA_WIDTH - 70);
-      const y =
-        edge === 1
-          ? margin
-          : edge === 3
-            ? ARENA_HEIGHT - margin
-            : this.random.between(70, ARENA_HEIGHT - 70);
-      const maxHealth = (this.shortRun ? 180 : 125 + wave * 30) * (index % 5 === 0 ? 1.35 : 1);
-      this.enemies.push({
-        id: `enemy-${this.nextEntityId++}`,
-        x,
-        y,
-        previousX: x,
-        previousY: y,
-        radius: index % 5 === 0 ? 18 : 14,
-        health: maxHealth,
-        maxHealth,
-        speed: 34 + wave * 6,
-        damage: this.shortRun ? 8 + wave * 2.4 : 0.12 + wave * 0.04,
-        attackRange: 94,
-        attackCooldown: 1.25,
-        cooldownRemaining: this.random.between(0, 0.8),
-        hitFlashTicks: 0,
-        targetId: '',
-      });
-    }
+    const composition: EnemyArchetype[] = this.shortRun
+      ? [wave === 1 ? 'swarmer' : wave === 2 ? 'splitter' : 'commander']
+      : wave === 1
+        ? ['swarmer', 'swarmer', 'swarmer', 'swarmer', 'swarmer', 'splitter', 'swarmer']
+        : wave === 2
+          ? ['swarmer', 'swarmer', 'sniper', 'sniper', 'splitter', 'bulwark', 'swarmer', 'splitter']
+          : [
+              'swarmer',
+              'swarmer',
+              'sniper',
+              'sniper',
+              'splitter',
+              'bulwark',
+              'bulwark',
+              'swarmer',
+              'commander',
+            ];
+    composition.forEach((archetype, index) =>
+      this.enemies.push(this.createEnemy(archetype, wave, index)),
+    );
+    this.emit('wave-start', ARENA_WIDTH / 2, ARENA_HEIGHT / 2, wave === 3 ? 'heavy' : 'medium');
+  }
+
+  private createEnemy(
+    archetype: EnemyArchetype,
+    wave: number,
+    index: number,
+    position?: { x: number; y: number },
+  ): Enemy {
+    const edge = index % 4;
+    const margin = 38;
+    const x =
+      position?.x ??
+      (edge === 0
+        ? margin
+        : edge === 2
+          ? ARENA_WIDTH - margin
+          : this.random.between(75, ARENA_WIDTH - 75));
+    const y =
+      position?.y ??
+      (edge === 1
+        ? margin
+        : edge === 3
+          ? ARENA_HEIGHT - margin
+          : this.random.between(75, ARENA_HEIGHT - 75));
+    const base = enemyStats(archetype, wave, this.shortRun);
+    return {
+      id: `enemy-${this.nextEntityId++}`,
+      archetype,
+      x,
+      y,
+      previousX: x,
+      previousY: y,
+      velocityX: 0,
+      velocityY: 0,
+      facing: Math.PI,
+      knockbackX: 0,
+      knockbackY: 0,
+      radius: base.radius,
+      health: base.health,
+      maxHealth: base.health,
+      speed: base.speed,
+      damage: base.damage,
+      attackRange: base.range,
+      attackCooldown: base.cooldown,
+      cooldownRemaining: this.random.between(0, base.cooldown),
+      hitFlashTicks: 0,
+      lastDamageTick: -9999,
+      targetId: '',
+      markTicks: 0,
+      telegraphTicks: 0,
+      slowTicks: 0,
+      elite: archetype === 'commander',
+      lastHitOwnerId: '',
+      splitDepth: archetype === 'splitter-child' ? 1 : 0,
+    };
   }
 
   private copyPreviousPositions(): void {
@@ -393,6 +520,9 @@ export class SwarmSimulation {
     );
     for (const robot of this.robots) {
       const enemy = nearest(robot, this.enemies);
+      const alliesUnderThreat = this.robots.filter((ally) =>
+        this.enemies.some((candidate) => distance(ally, candidate) < 190),
+      ).length;
       const context: ScriptContext = {
         health: robot.health,
         health_percent: (robot.health / robot.maxHealth) * 100,
@@ -400,23 +530,93 @@ export class SwarmSimulation {
         'enemy.distance': enemy ? distance(robot, enemy) : 9999,
         attack_range: robot.attackRange,
         ally_lowest_health: lowestAllyHealth,
+        ability_ready: robot.abilityCooldown <= 0 ? 1 : 0,
+        ability_cooldown: robot.abilityCooldown,
+        'enemy.marked': enemy?.markTicks ? 1 : 0,
+        allies_under_threat: alliesUnderThreat,
       };
       const decision = executeProgram(this.programs[robot.role], context, 64);
       robot.command = decision.command;
       robot.guarding = decision.command === 'guard';
-      this.recordDecision(robot, decision.command, context['enemy.distance']);
+      const status = isAbility(decision.command)
+        ? this.activateAbility(robot, decision.command, enemy)
+        : this.commandStatus(robot, decision.command, enemy);
+      this.recordDecision(robot, decision.command, context['enemy.distance'], status.executed);
       traces.push({
         tick: this.tick,
         robotId: robot.id,
         robot: robot.role,
         command: decision.command,
         span: decision.span,
+        ...status,
       });
     }
     return traces;
   }
 
-  private recordDecision(robot: Robot, command: CommandName, enemyDistance: number): void {
+  private commandStatus(
+    robot: Robot,
+    command: CommandName,
+    enemy: Enemy | undefined,
+  ): { executed: boolean; reason?: string } {
+    if (command !== 'attack') return { executed: true };
+    if (!enemy) return { executed: false, reason: 'No target available.' };
+    if (distance(robot, enemy) > robot.attackRange)
+      return { executed: false, reason: 'Target is outside attack range.' };
+    if (robot.energy < 12) return { executed: false, reason: 'Needs 12 energy.' };
+    return { executed: true };
+  }
+
+  private activateAbility(
+    robot: Robot,
+    ability: AbilityName,
+    enemy: Enemy | undefined,
+  ): { executed: boolean; reason?: string } {
+    const metrics = this.metrics.perRobot[robot.role];
+    metrics.abilityAttempts += 1;
+    if (ability !== roleAbility[robot.role]) {
+      metrics.abilityFailures += 1;
+      return { executed: false, reason: `${title(robot.role)} cannot use ${ability}().` };
+    }
+    const cost = ability === 'overcharge' ? 45 : ability === 'shield' ? 40 : 30;
+    if (robot.abilityCooldown > 0) {
+      metrics.abilityFailures += 1;
+      return { executed: false, reason: `Ability ready in ${robot.abilityCooldown.toFixed(1)}s.` };
+    }
+    if (robot.energy < cost) {
+      metrics.abilityFailures += 1;
+      return { executed: false, reason: `Needs ${cost} energy.` };
+    }
+    if (ability === 'mark' && !enemy) {
+      metrics.abilityFailures += 1;
+      return { executed: false, reason: 'No target available to mark.' };
+    }
+    robot.energy -= cost;
+    robot.abilityCooldown = ability === 'overcharge' ? 8 : ability === 'shield' ? 9 : 6;
+    robot.abilityTicks = Math.round(
+      (ability === 'shield' ? 3.6 : ability === 'mark' ? 0.45 : 3) * FIXED_RATE,
+    );
+    this.metrics.abilitiesUsed[robot.role] += 1;
+    if (ability === 'mark' && enemy) enemy.markTicks = Math.round(4.8 * FIXED_RATE);
+    this.emit('ability', robot.x, robot.y, 'heavy', {
+      role: robot.role,
+      ability,
+      ...(enemy ? { targetId: enemy.id } : {}),
+      team: 'squad',
+    });
+    if (ability === 'overcharge' && this.hasUpgrade('volatile-overcharge')) {
+      for (const target of this.enemies.filter((candidate) => distance(robot, candidate) <= 115))
+        this.damageEnemy(target, 28, robot.id, robot.x, robot.y);
+    }
+    return { executed: true };
+  }
+
+  private recordDecision(
+    robot: Robot,
+    command: CommandName,
+    enemyDistance: number,
+    executed: boolean,
+  ): void {
     const robotMetrics = this.metrics.perRobot[robot.role];
     robotMetrics.commands += 1;
     this.metrics.commandsExecuted += 1;
@@ -426,65 +626,150 @@ export class SwarmSimulation {
     }
     if (command === 'retreat' && robot.health / robot.maxHealth > 0.8)
       robotMetrics.retreatsAbove80 += 1;
-    if (command === 'attack' && enemyDistance > robot.attackRange)
+    if (command === 'attack' && (!executed || enemyDistance > robot.attackRange))
       robotMetrics.attacksOutOfRange += 1;
   }
 
   private moveRobots(): void {
     for (const robot of this.robots) {
       const enemy = nearest(robot, this.enemies);
-      if (!enemy) continue;
+      if (!enemy) {
+        integrate(robot, 0, 0, 680);
+        continue;
+      }
+      let desired = { x: 0, y: 0 };
+      const speedBoost =
+        this.hasUpgrade('survival-servos') && robot.health / robot.maxHealth < 0.35 ? 1.45 : 1;
+      const baseSpeed = robot.speed * speedBoost;
       if (robot.command === 'attack') this.tryShoot(robot, enemy, 'squad');
-      if (robot.command === 'approach')
-        moveToward(
+      if (robot.command === 'approach') {
+        if (robot.role === 'striker' && robot.dashCooldown <= 0 && distance(robot, enemy) > 120) {
+          robot.dashTicks = 6;
+          robot.dashCooldown = 2.4;
+        }
+        desired = towardVelocity(
           robot,
-          enemy.x,
-          enemy.y,
-          robot.speed / FIXED_RATE,
-          Math.max(35, robot.attackRange * 0.78),
+          enemy,
+          baseSpeed * (robot.dashTicks > 0 ? 1.65 : 1),
+          Math.max(38, robot.attackRange * 0.78),
         );
-      if (robot.command === 'retreat') moveAway(robot, enemy.x, enemy.y, robot.speed / FIXED_RATE);
-      if (robot.command === 'guard') {
+      }
+      if (robot.command === 'retreat') desired = awayVelocity(robot, enemy, baseSpeed);
+      if (robot.command === 'guard' || robot.command === 'shield') {
         const vulnerable = [...this.robots].sort(
           (left, right) => left.health / left.maxHealth - right.health / right.maxHealth,
         )[0];
-        if (vulnerable) moveToward(robot, vulnerable.x, vulnerable.y, robot.speed / FIXED_RATE, 38);
+        if (vulnerable) desired = towardVelocity(robot, vulnerable, baseSpeed, 42);
       }
+      if (robot.command === 'overcharge' || robot.command === 'mark') desired = { x: 0, y: 0 };
+      const separation = this.robotSeparation(robot);
+      desired.x += separation.x;
+      desired.y += separation.y;
+      integrate(robot, desired.x, desired.y, 760);
       constrain(robot);
     }
   }
 
+  private robotSeparation(robot: Robot): { x: number; y: number } {
+    let x = 0;
+    let y = 0;
+    for (const ally of this.robots) {
+      if (ally.id === robot.id) continue;
+      const gap = distance(robot, ally);
+      if (gap > 0 && gap < 48) {
+        x += ((robot.x - ally.x) / gap) * (48 - gap) * 6;
+        y += ((robot.y - ally.y) / gap) * (48 - gap) * 6;
+      }
+    }
+    return { x, y };
+  }
+
   private updateEnemyAI(): void {
     for (const enemy of this.enemies) {
-      const target = nearest(enemy, this.robots);
+      const target =
+        enemy.archetype === 'swarmer'
+          ? [...this.robots].sort((a, b) => a.health / a.maxHealth - b.health / b.maxHealth)[0]
+          : nearest(enemy, this.robots);
       if (!target) continue;
       enemy.targetId = target.id;
-      const separation = distance(enemy, target);
-      if (separation <= enemy.attackRange) this.tryShoot(enemy, target, 'hostile');
-      else
-        moveToward(enemy, target.x, target.y, enemy.speed / FIXED_RATE, enemy.attackRange * 0.82);
+      let desired = { x: 0, y: 0 };
+      const speed = enemy.speed * (enemy.slowTicks > 0 ? 0.56 : 1);
+
+      if (enemy.archetype === 'sniper' || enemy.archetype === 'commander') {
+        const gap = distance(enemy, target);
+        if (enemy.telegraphTicks > 0) {
+          enemy.telegraphTicks -= 1;
+          if (enemy.telegraphTicks === 0) this.fireProjectile(enemy, target, 'hostile');
+        } else if (enemy.cooldownRemaining <= 0 && gap <= enemy.attackRange) {
+          enemy.telegraphTicks = enemy.archetype === 'commander' ? 18 : 24;
+        } else if (gap < 210) desired = awayVelocity(enemy, target, speed);
+        else if (gap > enemy.attackRange * 0.88)
+          desired = towardVelocity(enemy, target, speed, enemy.attackRange * 0.78);
+      } else {
+        const surroundAngle = entityNumber(enemy.id) * 2.399;
+        const surroundRadius = enemy.archetype === 'swarmer' ? 32 : 0;
+        const point = {
+          x: target.x + Math.cos(surroundAngle) * surroundRadius,
+          y: target.y + Math.sin(surroundAngle) * surroundRadius,
+        };
+        const gap = distance(enemy, target);
+        if (gap <= enemy.attackRange) this.tryShoot(enemy, target, 'hostile');
+        else
+          desired = towardVelocity(
+            enemy,
+            point,
+            speed,
+            enemy.archetype === 'swarmer' ? 0 : enemy.attackRange * 0.72,
+          );
+      }
+      integrate(enemy, desired.x, desired.y, enemy.archetype === 'swarmer' ? 900 : 520);
       constrain(enemy);
     }
   }
 
   private tryShoot(owner: Actor, target: Actor, team: 'squad' | 'hostile'): void {
-    const energyOwner = 'energy' in owner ? (owner as Robot) : null;
     if (owner.cooldownRemaining > 0 || distance(owner, target) > owner.attackRange) return;
-    if (energyOwner && energyOwner.energy < 18) return;
-    if (energyOwner) energyOwner.energy -= 18;
-    owner.cooldownRemaining = owner.attackCooldown;
+    const robot = isRobot(owner) ? owner : null;
+    if (robot && robot.energy < 12) return;
+    if (robot) robot.energy -= 12;
+    this.fireProjectile(owner, target, team);
+  }
+
+  private fireProjectile(owner: Actor, target: Actor, team: 'squad' | 'hostile'): void {
+    const robot = isRobot(owner) ? owner : null;
+    const overcharged = robot?.role === 'striker' && robot.abilityTicks > 0;
+    if (robot) robot.shotCount += 1;
+    owner.cooldownRemaining = owner.attackCooldown * (overcharged ? 0.48 : 1);
+    const facing = Math.atan2(target.y - owner.y, target.x - owner.x);
+    const critical = Boolean(
+      robot && this.hasUpgrade('cryo-criticals') && robot.shotCount % 5 === 0,
+    );
+    const pierce = Boolean(robot && this.hasUpgrade('trident-bore') && robot.shotCount % 3 === 0);
     this.projectiles.push({
       id: `projectile-${this.nextEntityId++}`,
       x: owner.x,
       y: owner.y,
       previousX: owner.x,
       previousY: owner.y,
+      velocityX: Math.cos(facing) * (team === 'squad' ? 470 : 320),
+      velocityY: Math.sin(facing) * (team === 'squad' ? 470 : 320),
+      facing,
       radius: team === 'squad' ? 4 : 5,
       targetId: target.id,
       ownerId: owner.id,
       team,
-      damage: owner.damage,
-      speed: team === 'squad' ? 390 : 245,
+      damage: owner.damage * (overcharged ? 1.5 : 1),
+      speed: team === 'squad' ? 470 : 320,
+      chainRemaining: team === 'squad' && this.hasUpgrade('arc-relay') ? 1 : 0,
+      pierceRemaining: pierce ? 1 : 0,
+      critical,
+      hitIds: [],
+    });
+    this.emit('shot', owner.x, owner.y, 'light', {
+      team,
+      targetId: owner.id,
+      ...(robot ? { role: robot.role } : {}),
+      ...(isEnemy(owner) ? { archetype: owner.archetype } : {}),
     });
   }
 
@@ -496,46 +781,204 @@ export class SwarmSimulation {
       if (!target) continue;
       const step = projectile.speed / FIXED_RATE;
       if (distance(projectile, target) <= step + target.radius) {
-        const actualDamage =
-          projectile.team === 'hostile' && isRobot(target) && target.guarding
-            ? projectile.damage * 0.6
-            : projectile.damage;
-        target.health -= actualDamage;
-        target.hitFlashTicks = 3;
-        if (projectile.team === 'squad') {
-          this.metrics.totalDamage += actualDamage;
-          const owner = this.robots.find((robot) => robot.id === projectile.ownerId);
-          if (owner) this.metrics.perRobot[owner.role].damage += actualDamage;
-        } else {
-          this.metrics.damageReceived += actualDamage;
-          if (isRobot(target)) this.metrics.perRobot[target.role].damageReceived += actualDamage;
+        if (projectile.team === 'squad' && isEnemy(target))
+          this.hitEnemyWithProjectile(target, projectile);
+        else if (projectile.team === 'hostile' && isRobot(target))
+          this.hitRobotWithProjectile(target, projectile);
+        projectile.hitIds.push(target.id);
+        if (projectile.pierceRemaining > 0 && projectile.team === 'squad') {
+          projectile.pierceRemaining -= 1;
+          const next = nearestExcluding(target, this.enemies, projectile.hitIds, 150);
+          if (next) {
+            projectile.targetId = next.id;
+            remaining.push(projectile);
+          }
+        } else if (projectile.chainRemaining > 0 && projectile.team === 'squad') {
+          const next = nearestExcluding(target, this.enemies, projectile.hitIds, 145);
+          if (next) {
+            projectile.chainRemaining -= 1;
+            projectile.damage *= 0.65;
+            projectile.targetId = next.id;
+            remaining.push(projectile);
+          }
         }
       } else {
-        moveToward(projectile, target.x, target.y, step, 0);
+        const angle = Math.atan2(target.y - projectile.y, target.x - projectile.x);
+        projectile.facing = angle;
+        projectile.velocityX = Math.cos(angle) * projectile.speed;
+        projectile.velocityY = Math.sin(angle) * projectile.speed;
+        projectile.x += projectile.velocityX / FIXED_RATE;
+        projectile.y += projectile.velocityY / FIXED_RATE;
         remaining.push(projectile);
       }
     }
     this.projectiles = remaining;
   }
 
-  private updateCooldownsAndFlashes(): void {
+  private hitEnemyWithProjectile(enemy: Enemy, projectile: Projectile): void {
+    let damage = projectile.damage;
+    if (enemy.archetype === 'bulwark' || enemy.archetype === 'commander') {
+      const incomingAngle = Math.atan2(projectile.y - enemy.y, projectile.x - enemy.x);
+      const front = Math.cos(incomingAngle - enemy.facing) > 0.15;
+      if (front) damage *= enemy.archetype === 'commander' ? 0.55 : 0.45;
+    }
+    const owner = this.robots.find((robot) => robot.id === projectile.ownerId);
+    if (
+      owner?.role === 'striker' &&
+      this.hasUpgrade('lone-target-protocol') &&
+      this.enemies.filter(
+        (candidate) => candidate.id !== enemy.id && distance(candidate, enemy) < 115,
+      ).length === 0
+    )
+      damage *= 1.35;
+    const baseDamage = damage;
+    if (enemy.markTicks > 0) {
+      damage *= 1.35;
+      this.metrics.markedBonusDamage += damage - baseDamage;
+    }
+    this.damageEnemy(enemy, damage, projectile.ownerId, projectile.x, projectile.y);
+    if (projectile.critical) enemy.slowTicks = Math.max(enemy.slowTicks, 42);
+  }
+
+  private hitRobotWithProjectile(robot: Robot, projectile: Projectile): void {
+    const shield = this.robots.find(
+      (candidate) =>
+        candidate.role === 'guardian' &&
+        candidate.abilityTicks > 0 &&
+        distance(candidate, robot) <= 118,
+    );
+    const reduction = shield ? 0.42 : robot.guarding ? 0.68 : 1;
+    const actualDamage = projectile.damage * reduction;
+    const blocked = projectile.damage - actualDamage;
+    robot.health -= actualDamage;
+    robot.lastDamageTick = this.tick;
+    robot.hitFlashTicks = 3;
+    const angle = Math.atan2(robot.y - projectile.y, robot.x - projectile.x);
+    robot.knockbackX += Math.cos(angle) * 52;
+    robot.knockbackY += Math.sin(angle) * 52;
+    this.metrics.damageReceived += actualDamage;
+    this.metrics.perRobot[robot.role].damageReceived += actualDamage;
+    const enemyOwner = this.enemies.find((enemy) => enemy.id === projectile.ownerId);
+    if (enemyOwner?.archetype === 'sniper' || enemyOwner?.archetype === 'commander')
+      this.metrics.sniperDamage += actualDamage;
+    if (shield && blocked > 0) {
+      this.metrics.shieldDamageBlocked += blocked;
+      if (this.hasUpgrade('guardian-dynamo'))
+        shield.energy = Math.min(100, shield.energy + blocked * 0.22);
+      if (this.hasUpgrade('mirror-aegis') && enemyOwner)
+        this.damageEnemy(enemyOwner, blocked * 0.35, shield.id, shield.x, shield.y);
+    }
+    this.emit('impact', robot.x, robot.y, actualDamage > 22 ? 'medium' : 'light', {
+      team: 'hostile',
+      targetId: robot.id,
+    });
+  }
+
+  private damageEnemy(
+    enemy: Enemy,
+    damage: number,
+    ownerId: string,
+    impactX: number,
+    impactY: number,
+  ): void {
+    enemy.health -= damage;
+    enemy.lastHitOwnerId = ownerId;
+    enemy.lastDamageTick = this.tick;
+    enemy.hitFlashTicks = 3;
+    const angle = Math.atan2(enemy.y - impactY, enemy.x - impactX);
+    enemy.knockbackX += Math.cos(angle) * Math.min(75, damage * 2.1);
+    enemy.knockbackY += Math.sin(angle) * Math.min(75, damage * 2.1);
+    this.metrics.totalDamage += damage;
+    const owner = this.robots.find((robot) => robot.id === ownerId);
+    if (owner) this.metrics.perRobot[owner.role].damage += damage;
+    this.emit('impact', enemy.x, enemy.y, damage > 30 ? 'medium' : 'light', {
+      team: 'squad',
+      targetId: enemy.id,
+    });
+  }
+
+  private updateTimers(): void {
     for (const actor of [...this.robots, ...this.enemies]) {
       actor.cooldownRemaining = Math.max(0, actor.cooldownRemaining - 1 / FIXED_RATE);
       actor.hitFlashTicks = Math.max(0, actor.hitFlashTicks - 1);
     }
+    for (const robot of this.robots) {
+      const scoutBoost =
+        robot.role === 'scout' &&
+        this.hasUpgrade('evasive-clock') &&
+        this.tick - robot.lastDamageTick > FIXED_RATE * 2.5
+          ? 1.8
+          : 1;
+      robot.abilityCooldown = Math.max(0, robot.abilityCooldown - scoutBoost / FIXED_RATE);
+      robot.abilityTicks = Math.max(0, robot.abilityTicks - 1);
+      robot.dashTicks = Math.max(0, robot.dashTicks - 1);
+      robot.dashCooldown = Math.max(0, robot.dashCooldown - 1 / FIXED_RATE);
+    }
+    for (const enemy of this.enemies) {
+      enemy.markTicks = Math.max(0, enemy.markTicks - 1);
+      enemy.slowTicks = Math.max(0, enemy.slowTicks - 1);
+    }
   }
 
   private removeDeadEntities(): void {
-    const enemyCount = this.enemies.length;
-    this.enemies = this.enemies.filter((enemy) => enemy.health > 0);
-    this.metrics.enemiesDestroyed += enemyCount - this.enemies.length;
+    const deadEnemies = this.enemies.filter((enemy) => enemy.health <= 0);
+    if (deadEnemies.length === 0) {
+      this.robots = this.robots.filter((robot) => robot.health > 0);
+      return;
+    }
+    const deadIds = new Set(deadEnemies.map((enemy) => enemy.id));
+    this.enemies = this.enemies.filter((enemy) => !deadIds.has(enemy.id));
+    const finalDeathId =
+      this.enemies.length === 0 &&
+      !deadEnemies.some((enemy) => enemy.archetype === 'splitter' && enemy.splitDepth === 0)
+        ? deadEnemies.at(-1)?.id
+        : undefined;
+    for (const enemy of deadEnemies) {
+      this.metrics.enemiesDestroyed += 1;
+      if (enemy.archetype === 'splitter-child') this.metrics.splitChildrenDestroyed += 1;
+      const intensity =
+        enemy.archetype === 'commander'
+          ? 'boss'
+          : enemy.archetype === 'bulwark'
+            ? 'heavy'
+            : 'medium';
+      this.emit('death', enemy.x, enemy.y, intensity, {
+        archetype: enemy.archetype,
+        targetId: enemy.id,
+        team: 'hostile',
+        ...(enemy.id === finalDeathId ? { finalInWave: true } : {}),
+      });
+      if (enemy.markTicks > 0) {
+        if (this.hasUpgrade('bounty-circuit'))
+          for (const robot of this.robots) robot.energy = Math.min(100, robot.energy + 14);
+        if (this.hasUpgrade('viral-designator')) {
+          const next = nearest(enemy, this.enemies);
+          if (next) next.markTicks = Math.max(next.markTicks, Math.round(3.8 * FIXED_RATE));
+        }
+      }
+      if (enemy.archetype === 'splitter' && enemy.splitDepth === 0) {
+        for (const side of [-1, 1]) {
+          const child = this.createEnemy('splitter-child', this.wave, this.nextEntityId, {
+            x: enemy.x + side * 18,
+            y: enemy.y + side * 10,
+          });
+          this.enemies.push(child);
+        }
+      }
+      const owner = this.robots.find((robot) => robot.id === enemy.lastHitOwnerId);
+      if (owner && this.hasUpgrade('proximity-charge') && distance(owner, enemy) <= 105) {
+        for (const nearby of this.enemies.filter((candidate) => distance(candidate, enemy) <= 90))
+          this.damageEnemy(nearby, 24, owner.id, enemy.x, enemy.y);
+      }
+    }
     this.robots = this.robots.filter((robot) => robot.health > 0);
   }
 
   private selectUpgradeOptions(): UpgradeEffect[] {
-    const pool = [...UPGRADES];
+    const owned = new Set(this.appliedUpgrades.map((upgrade) => upgrade.id));
+    const pool = UPGRADES.filter((upgrade) => !owned.has(upgrade.id));
     const options: UpgradeEffect[] = [];
-    while (options.length < 3) {
+    while (options.length < 3 && pool.length > 0) {
       const index = this.random.integer(pool.length);
       const [selected] = pool.splice(index, 1);
       if (selected) options.push(selected);
@@ -545,46 +988,117 @@ export class SwarmSimulation {
 
   private applyUpgrade(upgrade: UpgradeEffect): void {
     for (const robot of this.robots) {
-      if (upgrade.stat === 'damage') robot.damage *= upgrade.multiplier;
-      if (upgrade.stat === 'range') robot.attackRange *= upgrade.multiplier;
-      if (upgrade.stat === 'speed') robot.speed *= upgrade.multiplier;
-      if (upgrade.stat === 'energyRegen') robot.energyRegen *= upgrade.multiplier;
-      if (upgrade.stat === 'cooldown') robot.attackCooldown *= upgrade.multiplier;
-      if (upgrade.stat === 'health') {
-        robot.maxHealth *= upgrade.multiplier;
+      if (upgrade.effect === 'damage') robot.damage *= upgrade.multiplier ?? 1;
+      if (upgrade.effect === 'range') robot.attackRange *= upgrade.multiplier ?? 1;
+      if (upgrade.effect === 'health') {
+        robot.maxHealth *= upgrade.multiplier ?? 1;
         robot.health = robot.maxHealth;
-      } else robot.health = robot.maxHealth;
+      } else robot.health = Math.min(robot.maxHealth, robot.health + robot.maxHealth * 0.22);
     }
+  }
+
+  private hasUpgrade(id: string): boolean {
+    return this.appliedUpgrades.some((upgrade) => upgrade.id === id);
+  }
+
+  private isShielded(robot: Robot): boolean {
+    return this.robots.some(
+      (candidate) =>
+        candidate.role === 'guardian' &&
+        candidate.abilityTicks > 0 &&
+        distance(candidate, robot) <= 118,
+    );
+  }
+
+  private emit(
+    type: CombatEvent['type'],
+    x: number,
+    y: number,
+    intensity: CombatEvent['intensity'],
+    details: Partial<Omit<CombatEvent, 'id' | 'tick' | 'type' | 'x' | 'y' | 'intensity'>> = {},
+  ): void {
+    this.combatEvents.push({
+      id: this.nextEventId++,
+      tick: this.tick,
+      type,
+      x,
+      y,
+      intensity,
+      ...details,
+    });
+    if (this.combatEvents.length > 180) this.combatEvents.splice(0, this.combatEvents.length - 180);
   }
 
   private observations(): string[] {
     const results: string[] = [];
-    const robotEntries = Object.entries(this.metrics.perRobot) as [RobotRole, RobotMetrics][];
-    const idlest = [...robotEntries].sort(
-      (left, right) =>
-        right[1].waits / Math.max(1, right[1].commands) -
-        left[1].waits / Math.max(1, left[1].commands),
-    )[0];
-    if (idlest && idlest[1].waits > 0)
+    const striker = this.metrics.perRobot.striker;
+    if (striker.abilityAttempts === 0)
       results.push(
-        `${title(idlest[0])} spent ${Math.round((idlest[1].waits / Math.max(1, idlest[1].commands)) * 100)}% of decisions waiting.`,
+        'Striker never attempted Overcharge; add an ability_ready rule to convert spare energy.',
       );
-    const retreating = robotEntries.find(([, metrics]) => metrics.retreatsAbove80 > 0);
-    if (retreating)
+    if (this.metrics.markedBonusDamage > 0)
       results.push(
-        `${title(retreating[0])} retreated ${retreating[1].retreatsAbove80} times while above 80% health.`,
+        `Scout's Mark added ${Math.round(this.metrics.markedBonusDamage)} squad damage.`,
       );
-    const missed = robotEntries.find(([, metrics]) => metrics.attacksOutOfRange > 0);
-    if (results.length < 2 && missed)
+    if (this.metrics.shieldDamageBlocked > 0)
       results.push(
-        `${title(missed[0])} attempted ${missed[1].attacksOutOfRange} attacks outside range.`,
+        `Guardian blocked ${Math.round(this.metrics.shieldDamageBlocked)} damage with Shield.`,
+      );
+    if (this.metrics.sniperDamage > this.metrics.damageReceived * 0.35)
+      results.push('Snipers dealt most incoming damage from outside standard attack range.');
+    const failed = (Object.entries(this.metrics.perRobot) as [RobotRole, RobotMetrics][]).find(
+      ([, metrics]) => metrics.abilityFailures > 2,
+    );
+    if (failed)
+      results.push(
+        `${title(failed[0])} had ${failed[1].abilityFailures} failed ability attempts; check cooldown and energy sensors.`,
       );
     if (results.length === 0)
       results.push(
-        'The squad kept every decision active and in range. Try a more specialized rule set next run.',
+        'The squad used its tactical windows cleanly; try a more specialized upgrade chain.',
       );
-    return results.slice(0, 2);
+    return results.slice(0, 3);
   }
+
+  private inferFailureCause(): string {
+    if (this.metrics.sniperDamage > this.metrics.damageReceived * 0.4) return 'sniper pressure';
+    if (this.metrics.shieldDamageBlocked < 10) return 'insufficient protection';
+    return 'squad integrity collapsed under mixed pressure';
+  }
+}
+
+function enemyStats(
+  archetype: EnemyArchetype,
+  wave: number,
+  shortRun: boolean,
+): {
+  health: number;
+  speed: number;
+  damage: number;
+  range: number;
+  cooldown: number;
+  radius: number;
+} {
+  if (shortRun)
+    return {
+      health: archetype === 'commander' ? 115 : 48,
+      speed: 125,
+      damage: archetype === 'commander' ? 13 : 7,
+      range: archetype === 'commander' ? 310 : 62,
+      cooldown: 1.15,
+      radius: archetype === 'commander' ? 24 : 13,
+    };
+  const scale = 1 + (wave - 1) * 0.12;
+  const stats: Record<EnemyArchetype, [number, number, number, number, number, number]> = {
+    swarmer: [105, 132, 0.7, 48, 0.92, 11],
+    sniper: [155, 74, 1.5, 365, 2.8, 14],
+    splitter: [235, 92, 1.25, 78, 1.25, 17],
+    'splitter-child': [82, 122, 0.6, 54, 1, 9],
+    bulwark: [405, 62, 1.7, 92, 1.45, 22],
+    commander: [800, 86, 3, 330, 2.25, 27],
+  };
+  const [health, speed, damage, range, cooldown, radius] = stats[archetype];
+  return { health: health * scale, speed, damage: damage * scale, range, cooldown, radius };
 }
 
 function distance(left: Pick<Actor, 'x' | 'y'>, right: Pick<Actor, 'x' | 'y'>): number {
@@ -593,6 +1107,14 @@ function distance(left: Pick<Actor, 'x' | 'y'>, right: Pick<Actor, 'x' | 'y'>): 
 
 function isRobot(actor: Actor): actor is Robot {
   return 'role' in actor;
+}
+
+function isEnemy(actor: Actor): actor is Enemy {
+  return 'archetype' in actor;
+}
+
+function isAbility(command: CommandName): command is AbilityName {
+  return command === 'overcharge' || command === 'shield' || command === 'mark';
 }
 
 function nearest<T extends Pick<Actor, 'x' | 'y'>>(
@@ -611,46 +1133,89 @@ function nearest<T extends Pick<Actor, 'x' | 'y'>>(
   return closest;
 }
 
-function moveToward(
+function nearestExcluding<T extends Pick<Actor, 'id' | 'x' | 'y'>>(
+  source: Pick<Actor, 'x' | 'y'>,
+  candidates: T[],
+  excluded: string[],
+  maxDistance: number,
+): T | undefined {
+  return nearest(
+    source,
+    candidates.filter(
+      (candidate) => !excluded.includes(candidate.id) && distance(source, candidate) <= maxDistance,
+    ),
+  );
+}
+
+function towardVelocity(
   entity: Pick<Actor, 'x' | 'y'>,
-  targetX: number,
-  targetY: number,
-  amount: number,
+  target: Pick<Actor, 'x' | 'y'>,
+  speed: number,
   stopDistance: number,
-): void {
-  const deltaX = targetX - entity.x;
-  const deltaY = targetY - entity.y;
+): { x: number; y: number } {
+  const deltaX = target.x - entity.x;
+  const deltaY = target.y - entity.y;
   const length = Math.hypot(deltaX, deltaY);
-  if (length <= stopDistance || length === 0) return;
-  const distanceToMove = Math.min(amount, length - stopDistance);
-  entity.x += (deltaX / length) * distanceToMove;
-  entity.y += (deltaY / length) * distanceToMove;
+  if (length <= stopDistance + 5 || length === 0) return { x: 0, y: 0 };
+  const ramp = Math.min(1, Math.max(0.18, (length - stopDistance) / 55));
+  return { x: (deltaX / length) * speed * ramp, y: (deltaY / length) * speed * ramp };
 }
 
-function moveAway(
+function awayVelocity(
   entity: Pick<Actor, 'x' | 'y'>,
-  targetX: number,
-  targetY: number,
-  amount: number,
-): void {
-  const deltaX = entity.x - targetX;
-  const deltaY = entity.y - targetY;
+  target: Pick<Actor, 'x' | 'y'>,
+  speed: number,
+): { x: number; y: number } {
+  const deltaX = entity.x - target.x;
+  const deltaY = entity.y - target.y;
   const length = Math.hypot(deltaX, deltaY) || 1;
-  entity.x += (deltaX / length) * amount;
-  entity.y += (deltaY / length) * amount;
+  return { x: (deltaX / length) * speed, y: (deltaY / length) * speed };
 }
 
-function constrain(entity: Pick<Actor, 'x' | 'y' | 'radius'>): void {
-  entity.x = Math.max(entity.radius + 22, Math.min(ARENA_WIDTH - entity.radius - 22, entity.x));
-  entity.y = Math.max(entity.radius + 22, Math.min(ARENA_HEIGHT - entity.radius - 22, entity.y));
+function integrate(actor: Actor, desiredX: number, desiredY: number, acceleration: number): void {
+  const maxChange = acceleration / FIXED_RATE;
+  actor.velocityX = approach(actor.velocityX, desiredX, maxChange);
+  actor.velocityY = approach(actor.velocityY, desiredY, maxChange);
+  actor.velocityX += actor.knockbackX / FIXED_RATE;
+  actor.velocityY += actor.knockbackY / FIXED_RATE;
+  actor.knockbackX *= 0.8;
+  actor.knockbackY *= 0.8;
+  actor.x += actor.velocityX / FIXED_RATE;
+  actor.y += actor.velocityY / FIXED_RATE;
+  if (Math.hypot(actor.velocityX, actor.velocityY) > 3)
+    actor.facing = turnToward(actor.facing, Math.atan2(actor.velocityY, actor.velocityX), 0.24);
+}
+
+function approach(value: number, target: number, amount: number): number {
+  if (value < target) return Math.min(target, value + amount);
+  return Math.max(target, value - amount);
+}
+
+function turnToward(value: number, target: number, amount: number): number {
+  const delta = Math.atan2(Math.sin(target - value), Math.cos(target - value));
+  return value + Math.max(-amount, Math.min(amount, delta));
+}
+
+function constrain(entity: Actor): void {
+  const nextX = Math.max(entity.radius + 22, Math.min(ARENA_WIDTH - entity.radius - 22, entity.x));
+  const nextY = Math.max(entity.radius + 22, Math.min(ARENA_HEIGHT - entity.radius - 22, entity.y));
+  if (nextX !== entity.x) entity.velocityX *= -0.18;
+  if (nextY !== entity.y) entity.velocityY *= -0.18;
+  entity.x = nextX;
+  entity.y = nextY;
+}
+
+function entityNumber(id: string): number {
+  return Number(id.match(/\d+/)?.[0] ?? 1);
 }
 
 function round(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
+
 function title(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-export { ARENA_HEIGHT, ARENA_WIDTH, FIXED_RATE };
+export { ARENA_HEIGHT, ARENA_WIDTH, FIXED_RATE, UPGRADES };
 export type { Program, SourceSpan };
