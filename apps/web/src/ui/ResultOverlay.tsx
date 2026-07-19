@@ -39,6 +39,31 @@ export function ResultOverlay({
             </div>
           ))}
         </div>
+        <div className="ability-summary">
+          <span>ABILITY USES</span>
+          <b>Overcharge {metrics.abilitiesUsed.striker}</b>
+          <b>Shield {metrics.abilitiesUsed.guardian}</b>
+          <b>Mark {metrics.abilitiesUsed.scout}</b>
+          <small>
+            {Math.round(metrics.shieldDamageBlocked)} blocked ·{' '}
+            {Math.round(metrics.markedBonusDamage)} marked bonus
+          </small>
+        </div>
+        <section className="final-build" data-testid="final-build">
+          <span>FINAL BUILD</span>
+          <div>
+            {result.appliedUpgrades.length ? (
+              result.appliedUpgrades.map((upgrade) => (
+                <article key={upgrade.id}>
+                  <b>{upgrade.name}</b>
+                  <small>{upgrade.synergy}</small>
+                </article>
+              ))
+            ) : (
+              <p>No protocols installed.</p>
+            )}
+          </div>
+        </section>
         <div className="observations">
           {observations.map((observation) => (
             <p key={observation}>↳ {observation}</p>

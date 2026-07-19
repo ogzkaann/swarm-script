@@ -2,51 +2,72 @@
 
 ## Player fantasy
 
-The player is a field programmer watching three tiny combat machines express their intent in motion. The fantasy is not typing arbitrary code; it is writing a compact doctrine, deploying it, seeing the squad succeed or fail, and recognizing exactly which rule caused the behavior.
+The player is a field programmer watching three small combat machines express intent in motion. The fantasy is not arbitrary coding: it is writing a compact doctrine, deploying it, seeing the squad succeed or fail, and recognizing which rule caused the behavior.
 
 ## Core loop
 
-1. Read or revise a robot's ordered rules.
-2. Deploy the squad with a chosen seed.
-3. Observe three robots interpret their scripts in a continuous arena.
-4. Diagnose positioning, idle time, unsafe attacks, and retreat behavior.
-5. Choose one deterministic squad upgrade after a cleared wave.
-6. Survive three waves, inspect the run analysis, and revise.
+1. Read or revise three ordered robot scripts.
+2. Deploy a deterministic seed and observe rule highlights, positioning, energy, and cooldowns.
+3. Diagnose threats: being surrounded, a Sniper telegraph, a Splitter about to multiply, or a guarded Bulwark facing the squad.
+4. Choose one seeded, build-changing protocol after waves one and two.
+5. Clear wave three, inspect ability use and the final build, then revise.
 
-The default scripts make the first screen immediately playable. Editing is optional before the first run; understanding comes from watching decision labels and combat outcomes.
+The defaults are deliberately functional. Editing is optional on the first run; understanding comes from watching active or blocked command lines and seeing the resulting combat state.
 
-## Player decisions
+## The squad
 
-- Rule priority: an early broad condition can shadow a later specialized one.
-- Thresholds: retreat timing trades damage uptime for survival.
-- Resource use: energy checks can prevent empty attack attempts.
-- Formation behavior: `guard()` protects a vulnerable ally at the cost of aggression.
-- Upgrade selection: each run offers three seeded choices that amplify a squad-wide strength.
-- Seed choice: repeat a scenario for controlled iteration or change it for a new encounter layout.
+| Role     | Identity                                 | Ability        | Cost / cooldown | Script purpose                                                                   |
+| -------- | ---------------------------------------- | -------------- | --------------- | -------------------------------------------------------------------------------- |
+| Striker  | Fast direct damage and short dash        | `overcharge()` | 45 energy / 8 s | Time a three-second offensive surge without abandoning low-health retreat logic. |
+| Guardian | Durable anchor and ally protection       | `shield()`     | 40 energy / 9 s | Protect nearby allies for 3.6 seconds when pressure is concentrated.             |
+| Scout    | Fast target selection and support damage | `mark()`       | 30 energy / 6 s | Mark a priority target for amplified squad damage for about 4.8 seconds.         |
 
-## Success and failure
+Ability commands use the same safe parser and interpreter as movement and attacks. A command can fail because of energy, cooldown, target, or tactical preconditions; the editor highlights that outcome instead of silently pretending it ran.
 
-Victory requires clearing all three waves with at least one robot alive. Defeat occurs when the squad is destroyed. A result is still useful when the run fails: damage, decision distribution, source-driven behavior metrics, and observations indicate what to change.
+## Enemy counters
+
+- **Swarmer:** surrounds the weakest robot. Separation, movement, Shield, and area-oriented upgrades prevent a pile-up.
+- **Sniper:** maintains range and shows a clear shot telegraph. Approach, retreat timing, Mark, and line-breaking movement matter.
+- **Splitter:** creates two smaller children on death. Burst timing and chain/pierce upgrades prevent the arena from filling.
+- **Bulwark:** reduces frontal damage. Flanking motion and target switching are more effective than shooting its guard.
+- **Commander:** wave-three elite combining a strong telegraph with frontal defense. The final build and coordinated abilities should matter.
+
+Enemy silhouettes, colors, facing, shields, marks, and telegraphs communicate these rules without requiring a separate manual.
+
+## Build draft
+
+Two between-wave choices create a compact build rather than a flat stat ladder. The pool currently contains 15 deterministic protocols:
+
+- Arc relay, Volatile overcharge, Mirror aegis, Viral designator, Bounty circuit
+- Cryo criticals, Trident bore, Proximity charge, Survival servos, Guardian dynamo
+- Evasive clock, Lone target protocol, Overclocked rounds, Targeting lattice, Ceramic shells
+
+Each card states both its direct effect and its build synergy. Examples include Mark feeding an energy economy, Shield combining with reflected damage, and rapid fire improving chain or slow application. The result screen records the final build beside real ability-use metrics.
 
 ## Game-feel principles
 
-- Logic must look alive: continuous steering and clear silhouettes turn rules into readable motion.
-- Feedback must explain: source labels, health bars, hit flashes, trails, and restrained bursts clarify causality.
-- Effects serve state: reward wave completion and important impacts without hiding targets.
-- Iteration stays quick: compiling is automatic, reset retains scripts, and speed controls shorten repeated observation.
-- The arena remains the visual focus even though code is a primary verb.
+- **Logic must look alive:** faster steering, acceleration, deceleration, separation, knockback, and clear silhouettes turn rules into readable motion.
+- **Feedback must explain:** source highlights, labels, health/energy state, trails, telegraphs, marks, shields, and impact flashes clarify causality.
+- **Deaths use one vocabulary:** every hostile routes through the same echo-collapse, flash, ring, fragment, shake, hit-stop, and audio pipeline; intensity varies for child, standard, strong, and boss deaths.
+- **Effects serve state:** event IDs prevent duplicated presentation, while reduced motion removes camera shake and shortens nonessential movement.
+- **Iteration stays quick:** automatic compilation, retained scripts, reset, and reliable 1×/2×/4× controls support repeated observation.
 
-## Progression direction
+## Balance target and evidence
 
-Future progression should unlock new programming concepts alongside new combat possibilities. Variables, reusable functions, squad signals, sensors, and limited memory can become rewards as well as language features. Persistent unlocks should broaden strategy without replacing the deterministic core.
+The target is a tense 2–3 minute normal run where the defaults demonstrate all three abilities but are not guaranteed to win. A deterministic 20-seed harness (seeds 43090–43109) produced:
 
-## Commercial expansion possibilities
+- 35% wins (7/20)
+- 176.18 seconds average simulated run duration
+- broad use of the upgrade pool rather than one forced choice
+- average ability uses per run: Striker 1.35, Guardian 15.4, Scout 15.1
+- mixed-pressure and Sniper-pressure failures, rather than a single universal failure mode
 
-- Robot chassis and weapon archetypes with distinct sensor/command surfaces
-- Encounter modifiers that reward specific logic styles
-- A visual trace debugger and timeline replay
-- Daily seeded challenges with verified checksums
-- Shareable script squads and replay files
-- A structured campaign that teaches increasingly expressive automation
+Seed `43105` is the curated default winning run. The automated harness is useful for regression and coarse tuning; human comprehension and strategy testing remain future work.
 
-These are directions, not v0.1 features. Multiplayer, cloud services, monetization, and a full campaign remain deliberately outside this slice.
+## Success and failure
+
+Victory requires clearing all three waves with at least one robot alive. Defeat occurs when the squad is destroyed. Both outcomes report damage, damage received, kills, commands, per-role contribution, abilities, Shield mitigation, Mark bonus damage, final build, checksum, and observations such as the dominant incoming threat.
+
+## Future direction
+
+Variables, reusable predicates, squad signals, limited memory, replay scrubbing, and shareable seeded challenges can deepen programming without weakening the deterministic core. Multiplayer, cloud services, monetization, and a full campaign remain outside v0.2.

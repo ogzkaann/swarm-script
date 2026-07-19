@@ -1,5 +1,5 @@
 const gameplayScreenshot = new URL(
-  '../../../../docs/screenshots/swarm-script-v0.1.png',
+  '../../../../docs/screenshots/swarm-script-v0.2-ability.png',
   import.meta.url,
 ).href;
 
@@ -44,7 +44,7 @@ export function LandingPage({ navigate }: { navigate: (path: string) => void }):
 
       <section className="landing-hero">
         <div className="hero-copy">
-          <p className="landing-kicker">TACTICAL AUTOMATION ROGUELITE // BUILD 0.1</p>
+          <p className="landing-kicker">TACTICAL AUTOMATION ROGUELITE // BUILD 0.2</p>
           <SwarmLogo />
           <h1>
             SWARM <span>SCRIPT</span>
@@ -74,7 +74,7 @@ export function LandingPage({ navigate }: { navigate: (path: string) => void }):
             <span>
               <i /> LIVE SIMULATION
             </span>
-            <span>SEED 43110</span>
+            <span>SEED 43105</span>
           </div>
           <img
             src={gameplayScreenshot}
@@ -188,7 +188,7 @@ export function ArchitecturePage({
       </nav>
 
       <header className="architecture-hero">
-        <p className="landing-kicker">TECHNICAL ARCHITECTURE // V0.1</p>
+        <p className="landing-kicker">TECHNICAL ARCHITECTURE // V0.2</p>
         <h1>
           Logic stays authoritative.
           <br />
@@ -239,10 +239,10 @@ export function ArchitecturePage({
         </article>
         <article>
           <p>RESPONSIVE BOUNDARIES</p>
-          <h2>Rendering cannot change combat</h2>
+          <h2>Newest state wins</h2>
           <p>
-            React receives throttled HUD data while Phaser receives snapshots through a thin bridge.
-            The worker remains authoritative.
+            A latest-only mailbox drops stale snapshots while Phaser interpolates from its current
+            pose. The worker remains authoritative at every speed.
           </p>
         </article>
         <article>

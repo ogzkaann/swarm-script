@@ -8,6 +8,10 @@ export interface ScriptContext {
   'enemy.distance': number;
   attack_range: number;
   ally_lowest_health: number;
+  ability_ready: number;
+  ability_cooldown: number;
+  'enemy.marked': number;
+  allies_under_threat: number;
 }
 
 export interface DecisionResult {
