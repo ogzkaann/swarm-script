@@ -12,7 +12,7 @@
     "@swarm-script/shared": "workspace:*",
     "@swarm-script/scripting": "workspace:*",
     "@swarm-script/simulation": "workspace:*",
-    "monaco-editor": "0.55.1",
+    "monaco-editor": "0.56.0",
     "phaser": "4.2.1",
     "react": "19.2.7",
     "react-dom": "19.2.7"
