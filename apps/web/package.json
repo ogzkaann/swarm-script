@@ -15,11 +15,11 @@
     "monaco-editor": "0.55.1",
     "phaser": "4.2.1",
     "react": "19.2.7",
-    "react-dom": "19.2.7"
+    "react-dom": "19.3.0"
   },
   "devDependencies": {
     "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
+    "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "latest",
     "typescript": "^5.8.3",
     "vite": "8.1.5"
